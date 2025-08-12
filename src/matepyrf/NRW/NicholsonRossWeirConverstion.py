@@ -7,17 +7,20 @@ from rich.logging import RichHandler
 from scipy.constants import c as c_const
 
 from .NRWBase import NRWBase
+from ..Waveguide import Waveguide
 
 class NicholsonRossWeirConverstion(NRWBase):
 
-    def __init__(self, measurement_data: rf.Network, f_c: float, L, l_p1=0, l_p2=0, name="nicholson_ross_weir_conversion"):
-        super().__init__(measurement_data, f_c= f_c, L=L, l_p1=l_p1, l_p2=l_p2)
+    def __init__(self, measurement_data: rf.Network, 
+                 waveguide_system: Waveguide,
+                 sample_length, l_p1=0, l_p2=0, name="nicholson_ross_weir_conversion"):
+        super().__init__(measurement_data, waveguide_system= waveguide_system, L=sample_length, l_p1=l_p1, l_p2=l_p2)
         self.name = name
 
       
 
         # (6) Calculate delta from equation (1.4)
-        self.mu_r = self.permeability(self.f, self.S11, self.S21, self.n)
+        self.mu_r = self.permeability(self.f, self.S11, self.S21, 0)
         # check if mu_r is over 1, and under 10
         # self.mu_r = np.where(np.abs(self.mu_r) < 1, 1, self.mu_r)
         # self.mu_r = np.where(np.abs(self.mu_r) > 5, 5, self.mu_r)
@@ -27,7 +30,7 @@ class NicholsonRossWeirConverstion(NRWBase):
             self.eps_r = np.interp(self.f, self.f[1:], self.eps_r[1:])
         # print(self.f, self.S11, self.S12, self.n)
         # print(self.mu_r)
-        self.eps_r = self.permittivity(self.f, self.S11, self.S21, self.mu_r, self.n)
+        self.eps_r = self.permittivity(self.f, self.S11, self.S21, self.mu_r, 0)
         # check if eps_r is over 1, and under 10
         # self.eps_r = np.where(np.abs(self.eps_r) < 1, 1, self.eps_r)
         # self.eps_r = np.where(np.abs(self.eps_r) > 10, 10, self.eps_r)
@@ -39,8 +42,8 @@ class NicholsonRossWeirConverstion(NRWBase):
         #     f.write(f"Loss tangent: {self.tanDelta}\n")
         # with f as
         self.logger.debug(self.dielectric_properties_df)
-        self.logger.info(f"Relative permittivity: {self.abs_epsr} ({self.rect2pol(self.abs_epsr)}), "
-                         f"relative permeability: {self.mu_r} ({self.rect2pol(self.mu_r)}) at frequency {self.f} Hz")
+        self.logger.info(f"Relative permittivity: {self.abs_epsr} ({self.polar(self.abs_epsr)}), "
+                         f"relative permeability: {self.mu_r} ({self.polar(self.mu_r)}) at frequency {self.f} Hz")
 
     def permeability(self, f, S11, S21, n: int):
         """	
@@ -50,12 +53,12 @@ class NicholsonRossWeirConverstion(NRWBase):
         """
         _lam_0 = c_const / f  # free space wavelength
         _X = self.calc_X(S11, S21)
-        _Gamma = self.reflection_coefficient(_X)
-        _T = self.transmission_coefficient(S11, S21, _Gamma)
+        _Gamma = self.calc_Gamma1(_X)
+        _T = self.calc_T(S11, S21, _Gamma)
         # self.logger.debug("[4.1]  From equation 1.5 ([1], P20, Eq. 1.5) , calculate alpha = ln(1/T)")
         _alpha = self.calc_alpha(_T, n)
         # self.logger.debug("[4.2]  Calculate beta = 1/Lambda")
-        _beta = self.calc_beta(_alpha, self.L, n)
+        _beta = self.calc_beta(_alpha, self.sample_length, n)
         # self.logger.debug("[4.3]  Calculate delta = (1 + Gamma) / (1 - Gamma)")
         _delta = self.calc_delta(_Gamma)
         # self.logger.debug("[4.4]  Caculate lam_og = 1 / (np.sqrt((1/lam_0**2) - 1/np.power(lam_c**2)))")
@@ -71,7 +74,7 @@ class NicholsonRossWeirConverstion(NRWBase):
         #         self.logger.debug("[4.1]  From equation 1.5 ([1], P20, Eq. 1.5) , calculate alpha = ln(1/T)")
         _lam_0 = c_const / f  # free space wavelength
         _X = self.calc_X(S11, S21)
-        _Gamma = self.reflection_coefficient(_X)
+        _Gamma = self.calc_Gamma1(_X)
         #_T = self.transmission_coefficient(S11, S21, _Gamma)
         # self.logger.debug("[4.1]  From equation 1.5 ([1], P20, Eq. 1.5) , calculate alpha = ln(1/T)")
         #_alpha = self.calc_alpha(_T, n)

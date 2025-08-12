@@ -42,7 +42,7 @@ class NewNonIterative(NRWBase):
         #eps_eff = np.power(_lam_og*_beta, n+1)*np.power(_delta, n-1)
         # eps_eff = lam_og*beta/delta
         eps_eff = np.power(lam_og*beta, 2)
-        self.logger.debug(f"Effective permittivity eps_eff = {self.rect(eps_eff)} ({self.rect2pol(eps_eff)})")
+        self.logger.debug(f"Effective permittivity eps_eff = {self.rect(eps_eff)} ({self.polar(eps_eff)})")
         return eps_eff
 
     def permeability(self, f, S11, S21, n: int):
@@ -52,12 +52,12 @@ class NewNonIterative(NRWBase):
         """
         _lam_0 = c_const / f  # free space wavelength
         _X = self.calc_X(S11, S21)
-        _Gamma = self.reflection_coefficient(_X)
-        _T = self.transmission_coefficient(S11, S21, _Gamma)
+        _Gamma = self.calc_Gamma1(_X)
+        _T = self.calc_T(S11, S21, _Gamma)
         # self.logger.debug("[4.1]  From equation 1.5 ([1], P20, Eq. 1.5) , calculate alpha = ln(1/T)")
         _alpha = self.calc_alpha(_T, n)
         # self.logger.debug("[4.2]  Calculate beta = 1/Lambda")
-        _beta = self.calc_beta(_alpha, self.L, n)
+        _beta = self.calc_beta(_alpha, self.sample_length, n)
         # self.logger.debug("[4.3]  Calculate delta = (1 + Gamma) / (1 - Gamma)")
         _delta = self.calc_delta(_Gamma)
         # self.logger.debug("[4.4]  Caculate lam_og = 1 / (np.sqrt((1/lam_0**2) - 1/np.power(lam_c**2)))")
@@ -74,12 +74,12 @@ class NewNonIterative(NRWBase):
         """
         _lam_0 = c_const / f  # free space wavelength
         _X = self.calc_X(S11, S21)
-        _Gamma = self.reflection_coefficient(_X)
-        _T = self.transmission_coefficient(S11, S21, _Gamma)
+        _Gamma = self.calc_Gamma1(_X)
+        _T = self.calc_T(S11, S21, _Gamma)
         # self.logger.debug("[4.1]  From equation 1.5 ([1], P20, Eq. 1.5) , calculate alpha = ln(1/T)")
         _alpha = self.calc_alpha(_T, n)
         # self.logger.debug("[4.2]  Calculate beta = 1/Lambda")
-        _beta = self.calc_beta(_alpha, self.L, n)
+        _beta = self.calc_beta(_alpha, self.sample_length, n)
         # self.logger.debug("[4.3]  Calculate delta = (1 + Gamma) / (1 - Gamma)")
         _delta = self.calc_delta(_Gamma)
         # self.logger.debug("[4.4]  Caculate lam_og = 1 / (np.sqrt((1/lam_0**2) - 1/np.power(lam_c**2)))")
@@ -96,5 +96,5 @@ class NewNonIterative(NRWBase):
         eps_r = ( (1 - (np.power(_lam_0, 2) / np.power(self.lam_c, 2)) )*_eps_eff + 
                  ((np.power(_lam_0, 2) /np.power(self.lam_c, 2)))*(1/_mu_eff) )
        
-        self.logger.debug(f"Calculated relative permittivity eps_r(n = {n}) = {self.rect(eps_r)} ({self.rect2pol(eps_r)})")
+        self.logger.debug(f"Calculated relative permittivity eps_r(n = {n}) = {self.rect(eps_r)} ({self.polar(eps_r)})")
         return eps_r

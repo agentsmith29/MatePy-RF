@@ -7,7 +7,7 @@ from scipy.constants import c as c_const
 from matplotlib.widgets import Slider
 import pandas as pd
 from scipy import stats
-from pymatrf.MeasurementData import MeasurementData
+from matepyrf.MeasurementData import MeasurementData
 from tqdm import tqdm
 import io
 import time
@@ -17,6 +17,8 @@ from scipy.interpolate import UnivariateSpline
 import numpy as np
 import scipy.integrate as integrate
 from scipy.signal import find_peaks
+
+from ..Waveguide import Waveguide
 
 """
 This code defines a base class for the Nicholson-Ross-Weir conversion of S-parameters to dielectric properties.
@@ -54,7 +56,9 @@ class NRWBase(MeasurementData):
     # ==================================================================================================================
     # 
     # ==================================================================================================================
-    def __init__(self, measurement_data, f_c, L,l_p1, l_p2):
+    def __init__(self, measurement_data,  
+                 waveguide_system: Waveguide,
+                 L, l_p1, l_p2):
         """
             Base Class for the Nicholson-Ross-Weir conversion.
         Args:
@@ -66,19 +70,19 @@ class NRWBase(MeasurementData):
         """
         self.logger = logging.getLogger(__name__)
         self.tqdm_out = TqdmToLogger(self.logger,level=logging.INFO)
-        super().__init__(measurement_data, f_c=f_c, L=L, l_p1=l_p1, l_p2=l_p2)
+        super().__init__(measurement_data, waveguide_system, sample_length=L, l_p1=l_p1, l_p2=l_p2)
         # remove the 10^9 from the frequency values in the measurement data
                 
         self.dielectric_properties_df = pd.DataFrame(index=self.f, columns=['mu_r'])
         
-        _X = self.calc_X(self.S11, self.S21)
-        _Gamma = self.reflection_coefficient(_X)
-        _T = self.transmission_coefficient(self.S11, self.S21, _Gamma)
+        self.X = self.calc_X(self.s_params['S11'], self.s_params['S21'])
+        self.Gamma = self.calc_Gamma1(self.X)
+        self.T = self.calc_T(self.s_params['S11'], self.s_params['S21'], self.Gamma)
         
         self._scaled_f = measurement_data.frequency.f#/ 1e9  # frequency in Hz
         self._scaled_f_w = 2*np.pi*self._scaled_f
         try:
-            self._s_params['tau_mea_gd'] = measurement_data.s21.group_delay.reshape(-1, 1).real
+            # self._s_params['tau_mea_gd'] = measurement_data.s21.group_delay.reshape(-1, 1).real
             # self._s_params['tau_mea_S21']  = -np.gradient(np.unwrap(np.angle(measurement_data.s21.s.squeeze())), measurement_data.frequency.w, axis=0).reshape(-1, 1) # group delay in seconds
             # make a polyfit of _T
             # _polyfit_T = np.polyfit(self._scaled_f, np.unwrap(np.angle(_T)), 1)
@@ -87,33 +91,33 @@ class NRWBase(MeasurementData):
             # self._s_params['polyfit_T'] = _polyfit_T[0]*self._scaled_f + _polyfit_T[1]  # store the polynomial fit
             self._s_params['tau_mea']  = -np.gradient(np.unwrap(np.angle(_T)), self._scaled_f_w, axis=0).reshape(-1, 1) # group delay in seconds
             # self._s_params['tau_mea'] = -_polyfit_T[0]/(2*np.pi)  # group delay in seconds
-            self._s_params['v_g_mea']  =  self.L / self._s_params['tau_mea'].values
+            # self._s_params['v_g_mea']  =  self.sample_length / self._s_params['tau_mea'].values
             
             #v = c_const/np.sqrt(1*2.8)
             #self._s_params['length_calc'] = self._s_params['tau_mea'].values * (v * np.sqrt(1-(v/ (2*3.0988e-3*self.f))**2) )
             
-            peaks = find_peaks(-self.S11, height=-20, distance=10)
+            # peaks = find_peaks(-self.S11, height=-20, distance=10)
             
-            _delta_f = np.diff(measurement_data.frequency.f[peaks[0]])
-            peaks = [measurement_data.frequency.f[peaks[0]][i] + _delta_f[i]/2 for i in range(len(_delta_f))]  # filter out peaks with delta_f < 0.1
-            print(f"Found {peaks} peaks in S11 data: {_delta_f}")
-            # use the data and interpolate the delta_f value
-            # delta_f_interp = UnivariateSpline(peaks, _delta_f, s=0)(self._scaled_f)
-            # print(delta_f_interp)
-            # self._s_params['v_g_mea_peaks'] = 2*delta_f_interp*self.L
-            self._s_params['lam_g_mea']  = self._s_params['v_g_mea']/self.f
+            # _delta_f = np.diff(measurement_data.frequency.f[peaks[0]])
+            # peaks = [measurement_data.frequency.f[peaks[0]][i] + _delta_f[i]/2 for i in range(len(_delta_f))]  # filter out peaks with delta_f < 0.1
+            # print(f"Found {peaks} peaks in S11 data: {_delta_f}")
+            # # use the data and interpolate the delta_f value
+            # # delta_f_interp = UnivariateSpline(peaks, _delta_f, s=0)(self._scaled_f)
+            # # print(delta_f_interp)
+            # # self._s_params['v_g_mea_peaks'] = 2*delta_f_interp*self.L
+            # self._s_params['lam_g_mea']  = self._s_params['v_g_mea']/self.f
             
             
-            self._s_params['n']  = self.L / self._s_params['lam_g_mea'].values
-            self.logger.debug(f"Calculated group delay from measurement data: {  self._s_params['tau_mea'].values}")
+            # self._s_params['n']  = self.sample_length / self._s_params['lam_g_mea'].values
+            # self.logger.debug(f"Calculated group delay from measurement data: {  self._s_params['tau_mea'].values}")
         except Exception as e:
-            raise e
             self.logger.warning(f"Group delay data not available: {e}")
             self._s_params['tau_mea'] = np.zeros((self.f.shape[0], 1)).real  # initialize to zeros if not available
             # Add group delay tau_g if available    
 
         self.logger.debug(f"S-Parameters DataFrame:\n{self._s_params}")
-        self._s_params.to_excel(f'{self._tmp_folder}/s_parameters.xlsx', index=False)  
+        self._s_params.to_excel(f'{self._tmp_folder}/s_parameters.xlsx', index=False)
+        exit()  
         # Save S-Parameters to Excel file
         
         try:
@@ -131,6 +135,26 @@ class NRWBase(MeasurementData):
 
         # self.logger.disabled = False
     
+    # ==================================================================================================================
+    # Getter and setter
+    # ==================================================================================================================
+    @property
+    def Gamma(self):
+        """
+            Returns the reflection coefficient Gamma.
+        """
+        return self._s_params['Gamma']
+   
+    @property
+    def T(self):
+        """
+            Returns the transmission coefficient T.
+        """
+        return self._s_params['T']
+    
+    # ==================================================================================================================
+    # 
+    # ==================================================================================================================
     def gamma(self, f: float, lambda_c: float, eps_r: float= 1, mu_r: float= 1):
         '''
             Propagation constant gamma for a rectangular waveguide filled with material eps_r and mu_r.
@@ -216,14 +240,14 @@ class NRWBase(MeasurementData):
             _f_scaled = f# / 1e9  # convert frequency to GHz
             _lam_c = c_const / (self.f_c)  #/ 1e9 cutoff wavelength in m
             lam0 = c_const / _f_scaled  # free space wavelength in m
-            _L = self.L#*1e9 # convert length to mm
+            _L = self.sample_length#*1e9 # convert length to mm
 
             f, _eps_r, _mu_r, tau_calc, interm_res = self.tau_calculated1(_f_scaled, eps_r, mu_r, _L, _lam_c)
-            _lam_g = self.lam_g(_f_scaled, n)
-            lam_g_estimated = self.lam_g_estimated(eps_r, mu_r, lam0, _lam_c)
+            # _lam_g = self.lam_g(_f_scaled, n)
+            # lam_g_estimated = self.lam_g_estimated(eps_r, mu_r, lam0, _lam_c)
             
-            v = c_const / np.sqrt(_eps_r * _mu_r)  # speed of light in the material
-            length_calc = self._s_params['tau_mea'].values * (v * np.sqrt(1-(v/ (2*3.0988e-3*self.f))**2) )
+            # v = c_const / np.sqrt(_eps_r * _mu_r)  # speed of light in the material
+            # length_calc = self._s_params['tau_mea'].values * (v * np.sqrt(1-(v/ (2*3.0988e-3*self.f))**2) )
 
             # a = 3.0988e-3
             # # calculate c in material using the formula c = 1/sqrt(mu_r*eps_r)
@@ -232,18 +256,18 @@ class NRWBase(MeasurementData):
             # _length  = tau_calc * (c_mat * np.sqrt(1 - (c_mat/(2*a*_f_scaled)**2)))
             # print(f"tau_calc: {tau_calc}, tau_meas: {tau_meas}, f: {f}, n: {n}, lam_g_estimated: {lam_g_estimated}, _length: {_length} m, c_mat: {c_mat} m/s")
 
-            __X = self.calc_X(S11, S21)
-            __Gamma = self.reflection_coefficient(__X)
-            __T = self.transmission_coefficient(S11, S21, __Gamma)
-            # self.logger.debug("[4.1]  From equation 1.5 ([1], P20, Eq. 1.5) , calculate alpha = ln(1/T)")
-            __alpha = self.calc_alpha(__T, n)
+            # __X = self.calc_X(S11, S21)
+            # __Gamma = self.reflection_coefficient(__X)
+            # __T = self.transmission_coefficient(S11, S21, __Gamma)
+            # # self.logger.debug("[4.1]  From equation 1.5 ([1], P20, Eq. 1.5) , calculate alpha = ln(1/T)")
+            # __alpha = self.calc_alpha(__T, n)
 
             
-            _d_beta_df = self.L * np.gradient(self.calc_beta(__alpha, self.L, n), f)
+            # _d_beta_df = self.sample_length * np.gradient(self.calc_beta(__alpha, self.sample_length, n), f)
 
             # eps_re = [self.kkr(f, _epsimg)  for _epsimg, _f in  zip(np.imag(eps_r), f)] # calculate the scalar Kramers-Kronig relation for eps_r
             L, lam_c, term1, term2, sqrt_term, d_product_df, numerator, product = interm_res
-            err = np.abs(np.longdouble(length_calc) - np.longdouble(L))
+            err = np.abs(np.longdouble(tau_calc) - np.longdouble(tau_meas))
             # err = np.abs(np.longdouble(tau_calc) - np.longdouble(self._s_params['tau_mea'].values))
 
 
@@ -257,7 +281,7 @@ class NRWBase(MeasurementData):
                 'L': L, 
                 'lam_c': lam_c,
                 'tau_calc': tau_calc, 
-                'tau_meas': tau_meas, 
+                'tau_mea': tau_meas, 
                 'err': err, 
                 'term1': term1, 
                 'term2': term2, 
@@ -266,8 +290,8 @@ class NRWBase(MeasurementData):
                 'numerator': numerator, 
                 'product': product,
                 #
-                'length_calc': length_calc,
-                '_calc_beta': _d_beta_df
+                # 'length_calc': length_calc,
+                # '_calc_beta': _d_beta_df
                 # 'lam_g_mea': self._s_params['lam_g_mea'].values,
                 # 'lam_g': _lam_g,
                 # 'lam_g_estimated': lam_g_estimated,
@@ -434,13 +458,13 @@ class NRWBase(MeasurementData):
         - tau_cal: calculated group delay [s]
         """
         # Product and derivative
-        eps_r = eps_r.real
-        mu_r = mu_r.real
+        eps_r = eps_r
+        mu_r = mu_r
         d_eps_r_df = np.gradient(eps_r, f)
         d_mu_r_df = np.gradient(mu_r, f)
         product = eps_r * mu_r
         
-        d_product_df = (np.gradient(eps_r, f)*mu_r +  np.gradient(mu_r, f)*eps_r)
+        d_product_df = 0*(np.gradient(eps_r, f)*mu_r +  np.gradient(mu_r, f)*eps_r)
         term1 = 2*f * eps_r* mu_r
         term2 = (np.power(f, 2)) * (np.gradient(eps_r, f)*mu_r +  np.gradient(mu_r, f)*eps_r)
         # print(f"    -> (eps_r*mu_r).real: {product} and d_product_df: {d_product_df}")
@@ -501,35 +525,73 @@ class NRWBase(MeasurementData):
         returns the group wavelength lam_g
         """
         _X = self.calc_X(self.S11, self.S21)
-        _Gamma = self.reflection_coefficient(_X)
-        _T = self.transmission_coefficient(self.S11, self.S21, _Gamma)
+        _Gamma = self.calc_Gamma1(_X)
+        _T = self.calc_T(self.S11, self.S21, _Gamma)
         # self.logger.debug("[4.1]  From equation 1.5 ([1], P20, Eq. 1.5) , calculate alpha = ln(1/T)")
         _alpha = self.calc_alpha(_T, n)
 
-        return 1/self.calc_beta(_alpha, self.L, n).real
+        return 1/self.calc_beta(_alpha, self.sample_length, n).real
     
     # ==================================================================================================================
-    # 
+    # Standard NRW calculations
+    # [1] Nicholson, Ross, and Weir, "A Generalized Method for Extracting the Dielectric Properties of Materials from
+    #     Measured Scattering Parameters", IEEE Transactions on Microwave Theory and Techniques, 1976.
+    # [2] https://nvlpubs.nist.gov/nistpubs/Legacy/TN/nbstechnicalnote1355r.pdf
+    #
+    # See [1], Page 34, Equation 5 - 7
+    # See [2], Page 10, Equation 2.26 - 2.30
     # ==================================================================================================================
     def calc_X(self, S11, S21):
         """
-        Calculate the reactance X from S11 and S21.
-        X = (S11** 2 - S21**2 + 1) / (2*S11)
-        [1], Page 19, Equation 1.2
-        """
-        self.logger.debug(f"I'll work with S11:\n{self.rect2pol(S11)}\nand S21:\n{self.rect2pol(S21)}")
-        self.logger.debug(f"Calculating X = (S11^2 - S21^2 + 1) / (2*S11)")
+        Calculate *X* for the reflection coeficient *Gamma1*, which is given explicitly in terms of the scattering 
+        parameters *S11* and *S21* where
+        ```
+        X = (1-V1*V2)(V1-V2) =(S11^2 - S21^2 + 1) / (2*S11)
+        ```
+        and 
+        ```
+        V1 = S21 + S11, V2 * S21 - S11
+        ```
+        [1], Page 34, Equation 6
+        [2], Page 10, Equation 2.27
+        
+        Args:
+            S11: S-parameter S11, complex numpy array
+            S21: S-parameter S21, complex numpy array
+        
+        Returns:
+            Complex numpy array representing *X*, the intermediate variable for calculating the reflection coefficient 
+            *Gamma1*.
+        """ 
+        self.logger.info(f"Calculating X = (S11^2 - S21^2 + 1) / (2*S11)")
+        self.logger.debug(f"I'll work with \nS11: {self.str_array_repr(S11)} and \nS21:{self.str_array_repr(S21)}")
         _X = (np.power(S11,2) - np.power(S21,2) + 1) / (2*S11) 
-        self.logger.info(f"X = {self.rect2pol(_X)}")
-        self.logger.debug(f"X = {self.rect(_X)}")
+        self.logger.info(f"X = {self.str_array_repr(_X)}")
+        self.logger.debug(f"X = {self.str_array_repr(_X, polar=False)}")
         return _X
 
-    def reflection_coefficient(self, X):
+    def calc_Gamma1(self, X):
         """
-        Calculate the reflection coefficient Γ from X
+        Calculate the reflection coefficient *Gamma1* for the NRW procedure from *X*
+        ```
+            Γ = Gamma1 = X + sqrt(X^2 - 1)
+        ```
+        with
+        ```
+            X = (S11^2 - S21^2 + 1) / (2*S11)
+        ```
+        The definition of *X* is defined in method
+        ```
+        def calc_X(self, S11, S21)
+        ```
+        Args:
+            X: complex numpy array, the intermediate variable calculated from S11 and S21.
+        
+        Returns:
+            Complex numpy array representing the reflection coefficient Gamma1.
 
-        Γ = Gamma = X + np.sqrt(X**2 - 1)
-        [1], Page 19, Equation 1.1
+        [1], Page 34, Equation 5
+        [2], Page 10, Equation 2.26
         """
         _str_GAMMA=ud.lookup("GREEK CAPITAL LETTER GAMMA")
         self.logger.debug(f"Calculating reflection coefficient {_str_GAMMA} = X + sqrt(X**2 - 1)")
@@ -537,101 +599,42 @@ class NRWBase(MeasurementData):
         _Gamma_neg = X - np.sqrt(np.power(X,2) - 1)
         # Apply the condition |gamma| < 1 element-wise for numpy arrays
         _Gamma = np.where(np.abs(_Gamma_pos) < 1, _Gamma_pos, _Gamma_neg)
-        self.logger.info(f"{_str_GAMMA} = {self.rect2pol(_Gamma)}")
-        self.logger.debug(f"{_str_GAMMA} = {self.rect(_Gamma)}")
+        self.logger.info(f"{_str_GAMMA} = {self.str_array_repr(_Gamma)}")
+        self.logger.debug(f"{_str_GAMMA} = {self.str_array_repr(_Gamma, polar=False)}")
         self.Gamma = _Gamma
         self.dielectric_properties_df['Gamma'] = _Gamma
         return _Gamma
-    
-    def reflection_coefficient2(self, f: np.ndarray, S11: np.ndarray, Z: np.ndarray, x: np.ndarray, L: float):
+
+    def calc_T1(self, S11, S21, Gamma):
         """
-            The reflection coefficient 
-            ```
-            Gamma2 = +- sqrt((x-Z^2)/(x*Z^2 - 1))
-            ```
-            from 
-            ```
-            x = (S21 * S12 - S11 * S22) * exp(2 * gamma0*(L_air-L))
-            ```
-            and  
-            ```
-            Z = sqrt( (x-Z^2)
-            ``` to resolve the ambiguity of the sign of the square root for finding the physical 
-            root of the transmission coefficient determined by Z, defined by 
-            ```
-                def calc_Z(self, f, S11, S21, S12, S22, L_air, L):
-            ```
-            The ambiguity in the plus-or-minus sign in eq (2.54) can be resolved by considering the reflection 
-            coefficient Gamma3 calculated from S11 alone:
-            ```
-                def reflection_coefficient3(self, f, S11, Z, L)
-            ```
-            Reference: [2], Page 18, Equation 2.54
-
-            Args:
-                f: frequency array [Hz]
-                S11: S-parameter S11
-                Z: characteristic impedance [Ohms]	
-                    see
-                    ```
-                        def calc_Z(self, f, S11, S21, S12, S22, L_air, L)
-                    ```
-                    for implementation of Z calculation
-                L: length of the sample [m]
-                x: calculated reactance from S-parameters
-        """
-        
-        _Gamma3 = self.reflection_coefficient3(f, S11, Z, L)
-
-        _Gamma2_plus = np.sqrt( (x-np.power(Z, 2))/(x*np.power(Z, 2) - 1) )
-        _Gamma2_neg = -np.sqrt( (x+np.power(Z, 2))/(x*np.power(Z, 2) + 1) )
-        # The ambiguity in the plus-or-minus sign  can be resolved by considering the reflection coefficient Gamma3
-        # calculated from S11 alone 
-        _sign_Gamma3 = np.sign(_Gamma3)
-        # Check that the sign of the reflection coefficient Gamma3 is the same as the sign of the square root
-        _Gamma2 = np.where(_sign_Gamma3 == np.sign(_Gamma2_plus), _Gamma2_plus, _Gamma2_neg)
-
-        return _Gamma2
-    
-    def reflection_coefficient3(self, f, S11, Z, L):
-        """
-        Calculate the reflection coefficient Γ3 from S11, Z and L.
-        """
-        _gamma0 = self.gamma(f, self.lam_c, 1, 1)  # Propagation constant
-        _alpha = np.exp(-2*_gamma0*L)
-        term1 = _alpha*(np.power(Z, 2) - 1)
-
-        sqrt_term_1 = np.power(_alpha, 2) * np.power(Z, 4)
-        sqrt_term_2 = 2 *  np.power(Z, 2) * (2*S11 - np.power(_alpha, 2)) 
-        sqrt_term = np.sqrt(sqrt_term_1 + sqrt_term_2 + np.power(_alpha, 2))
-        
-        nominator_plus = term1 + np.sqrt(sqrt_term)
-        nominator_neg = term1 - np.sqrt(sqrt_term)
-        denominator = 2*S11*(np.power(Z, 2))
-
-        _Gamma3_plus = nominator_plus / denominator
-        _Gamma3_neg = nominator_neg / denominator
-
-        # The correct root is the one that satisfies the condition |Gamma| <= 1
-        _Gamma3 = np.where(np.abs(_Gamma3_plus) <= 1, _Gamma3_plus, _Gamma3_neg)
-        
-        return _Gamma3
-
-    def transmission_coefficient(self, S11, S21, Gamma):
-        """
-        Calculate the transmission coefficient T from S21.
-        T = (S11 + S21 - gamma) / (1 - (S11  + S21) * gamma)
-        [1], Page 19, Equation 1.3
+        Calculate the transmission coefficient *T1* for the Nicolson-Ross-Weir procedure from the scattering 
+        parameters *S11* and *S21* where
+        ```
+            T1 = (S11 + S21 - Gamma1) / (1 - (S11  + S21) * Gamma1)
+        ```
+        with *Gamma1* 
+        ```
+            Gamma1 = X + sqrt(X^2 - 1)
+        ```
+        The definition of *Gamma1* is defined in method
+        ```
+        def calc_Gamma1(self, X)
+        ```
+        For more details, see the references:
+        [1], Page 34, Equation 7
+        [2], Page 10, Equation 2.30
         """
         self.logger.debug(f"Calculating transmission coefficient "
                           f"T = (S11 + S21 - {ud.lookup("GREEK CAPITAL LETTER GAMMA")}) / (1 - (S11  + S21) "
                           f"* {ud.lookup("GREEK CAPITAL LETTER GAMMA")})")
         _T = (S11 + S21 - Gamma) / (1 - (S11 + S21) * Gamma)
-        self.logger.info(f"T = {self.rect2pol(_T)}")
-        self.logger.debug(f"T = {self.rect(_T)}")
+        self.logger.info(f"T = {self.str_array_repr(_T)}")
+        self.logger.debug(f"T = {self.str_array_repr(_T, polar=False)}")
         self.T = _T
         self.dielectric_properties_df['T'] = _T  
         return _T
+
+    # ===================================================================================================================
 
     def lam_og(self, lam_0, lam_c):
         """
@@ -641,7 +644,7 @@ class NRWBase(MeasurementData):
         _str_lamda = ud.lookup("GREEK SMALL LETTER LAMDA")
         self.logger.debug(f"Calculating {_str_lamda}_og = 1 / (sqrt((1/({_str_lamda}0^2)) - 1/{_str_lamda}c^2))")
         lam_og = 1 / (np.sqrt( (1/np.power(lam_0,2)) - (1/np.power(lam_c, 2))) )
-        self.logger.debug(f"{_str_lamda}_og({_str_lamda}0 = {np.round(lam_0,2)}, {_str_lamda}c = {np.round(lam_c,2)}) = {self.rect2pol(lam_og)}")
+        self.logger.debug(f"{_str_lamda}_og({_str_lamda}0 = {np.round(lam_0,2)}, {_str_lamda}c = {np.round(lam_c,2)}) = {self.polar(lam_og)}")
         self.logger.debug(f"{_str_lamda}_og({_str_lamda}0 = {np.round(lam_0,2)}, {_str_lamda}c = {np.round(lam_c,2)}) = {self.rect(lam_og)}")
         self.dielectric_properties_df['lam_og'] = lam_og
         return lam_og
@@ -663,7 +666,7 @@ class NRWBase(MeasurementData):
         ln_inv_t_mag = np.log(np.abs(1/T))
         ln_inv_t_imag = np.unwrap(np.angle(1/T, False)) + 2*np.pi*n  # This is the argument of 1/T
         ln_1_T = ln_inv_t_mag + 1j * ln_inv_t_imag
-        self.logger.info(f"{_str_alpha}(n={n}) = ln(1/T) = ln({np.abs(1/T)}) + j({np.angle(1/T, False)}+2*pi*{n}) ={self.rect2pol(ln_1_T)}")
+        self.logger.info(f"{_str_alpha}(n={n}) = ln(1/T) = ln({np.abs(1/T)}) + j({np.angle(1/T, False)}+2*pi*{n}) ={self.polar(ln_1_T)}")
         self.logger.debug(f"{_str_alpha}(n={n}) = ln(1/T) = ln({np.abs(1/T)}) + j({np.angle(1/T, False)}+2*pi*{n}) = {self.rect(ln_1_T)}")
         self.dielectric_properties_df['alpha'] = ln_1_T
         return ln_1_T
@@ -685,14 +688,14 @@ class NRWBase(MeasurementData):
         # Placeholder for eps_r and mu_r, these should be calculated or provided
         beta2 = -np.pow( (1/(2*np.pi*L)) * alpha, 2)
         self.logger.debug(f"Calculating {_str_beta}(n = {n}, L = {L:.2e})^2 = 1/({_str_Lambda}^2) = -(1/(2{_str_pi}L) * {_str_alpha})^2")
-        self.logger.info(f"{_str_beta}(n = {n}, L = {L:.2e})^2 = -(1/(2{_str_pi}L) * {_str_alpha})^2) = {self.rect2pol(beta2)}")
+        self.logger.info(f"{_str_beta}(n = {n}, L = {L:.2e})^2 = -(1/(2{_str_pi}L) * {_str_alpha})^2) = {self.polar(beta2)}")
         self.logger.debug(f"{_str_beta}(n = {n}, L = {L:.2e})^2 = -(1/(2{_str_pi}L) * {_str_alpha})^2) = {self.rect(beta2)}")
         beta_neg =  -np.sqrt(beta2)
         beta_pos = np.sqrt(beta2)
         # Real(beta) > 0
         beta = np.where(np.real(beta_pos) >= 0, beta_pos, beta_neg)
         self.logger.info(f"{_str_beta}(n = {n}, L = {L:.2e}) = sqrt({_str_beta}^2) = {self.rect(beta)}")
-        self.logger.debug(f"{_str_beta}(n = {n}, L = {L:.2e}) = sqrt({_str_beta}^2) = {self.rect2pol(beta)}")
+        self.logger.debug(f"{_str_beta}(n = {n}, L = {L:.2e}) = sqrt({_str_beta}^2) = {self.polar(beta)}")
         self.dielectric_properties_df['beta'] = beta
         return beta
         
@@ -707,7 +710,7 @@ class NRWBase(MeasurementData):
         _str_Gamma = ud.lookup("GREEK CAPITAL LETTER GAMMA")
         self.logger.debug(f"Calculating {_str_delta} = (1+{_str_Gamma})/(1-{_str_Gamma})")
         delta = (1 + Gamma) / (1 - Gamma)
-        self.logger.info(f"{_str_delta} = (1+{_str_Gamma})/(1-{_str_Gamma}) = {self.rect2pol(delta)}")
+        self.logger.info(f"{_str_delta} = (1+{_str_Gamma})/(1-{_str_Gamma}) = {self.polar(delta)}")
         self.logger.debug(f"{_str_delta} = (1+{_str_Gamma})/(1-{_str_Gamma}) = {self.rect(delta)}")
         self.dielectric_properties_df['delta'] = delta
         return delta
@@ -737,23 +740,16 @@ class NRWBase(MeasurementData):
         """
         # Calculate the propagation constant gamma
         gamma = 1j*((2*np.pi)/lam_0) * np.sqrt(eps_r * mu_r - np.power((lam_0/lam_c), 2))
-        self.logger.info(f">>> gamma: {self.rect(gamma)} ({self.rect2pol(gamma)})")
+        self.logger.info(f">>> gamma: {self.rect(gamma)} ({self.polar(gamma)})")
         inv_Gamma = 1j*(gamma/(2*np.pi))
-        self.logger.info(f">>> inv_Gamma: {self.rect(inv_Gamma)} ({self.rect2pol(inv_Gamma)})")
+        self.logger.info(f">>> inv_Gamma: {self.rect(inv_Gamma)} ({self.polar(inv_Gamma)})")
         inv_lam_g = (1/inv_Gamma).real
         self.logger.info(f">>> Estimated inverse group delay: {inv_lam_g} m")
         #lam_g = 1 / inv_lam_g
         #self.logger.info(f">>> Estimated group delay: {lam_g} m")
         return inv_lam_g
 
-    # ==================================================================================================================
-    # 
-    # ==================================================================================================================
-    def rect2pol(self, num, decimals=2):
-        return f"{np.round(np.abs(num),decimals)} ∠ {np.round(np.angle(num, deg=True), decimals)}"
-    
-    def rect(self, num, decimals=2):
-       return f"{np.round(np.real(num),decimals)} + j{np.round(np.imag(num), decimals)}"
+
 
     # ==================================================================================================================
     # 
@@ -803,7 +799,7 @@ class NRWBase(MeasurementData):
         self.fig = fig
 
         fig.suptitle(
-            self.__class__.__name__ + f" - L={self.L} m, f_c={self.f_c/1e9:.2f} GHz",
+            self.__class__.__name__ + f" - L={self.sample_length} m, f_c={self.f_c/1e9:.2f} GHz",
             fontsize=16
         )
 
@@ -1196,6 +1192,84 @@ class NRWBase(MeasurementData):
         _y = self.calc_y(f, S21, S12, L_air, L)
 
         _Z_pos = (_x+1)/(2*_y) + np.sqrt( ((_x+1)**2)/(2*_y) - 1 )
+        _Z_neg = (_x+1)/(2*_y) - np.sqrt( ((_x+1)**2)/(2*_y) - 1 )
+        # Select the correct root based on the condition |Z| < 1
+        _Z = np.where(np.abs(_Z_pos) < 1, _Z_pos, _Z_neg)
+        return _Z
+
+    def reflection_coefficient2(self, f: np.ndarray, S11: np.ndarray, Z: np.ndarray, x: np.ndarray, L: float):
+        """
+            The reflection coefficient 
+            ```
+            Gamma2 = +- sqrt((x-Z^2)/(x*Z^2 - 1))
+            ```
+            from 
+            ```
+            x = (S21 * S12 - S11 * S22) * exp(2 * gamma0*(L_air-L))
+            ```
+            and  
+            ```
+            Z = sqrt( (x-Z^2)
+            ``` to resolve the ambiguity of the sign of the square root for finding the physical 
+            root of the transmission coefficient determined by Z, defined by 
+            ```
+                def calc_Z(self, f, S11, S21, S12, S22, L_air, L):
+            ```
+            The ambiguity in the plus-or-minus sign in eq (2.54) can be resolved by considering the reflection 
+            coefficient Gamma3 calculated from S11 alone:
+            ```
+                def reflection_coefficient3(self, f, S11, Z, L)
+            ```
+            Reference: [2], Page 18, Equation 2.54
+
+            Args:
+                f: frequency array [Hz]
+                S11: S-parameter S11
+                Z: characteristic impedance [Ohms]	
+                    see
+                    ```
+                        def calc_Z(self, f, S11, S21, S12, S22, L_air, L)
+                    ```
+                    for implementation of Z calculation
+                L: length of the sample [m]
+                x: calculated reactance from S-parameters
+        """
+        
+        _Gamma3 = self.reflection_coefficient3(f, S11, Z, L)
+
+        _Gamma2_plus = np.sqrt( (x-np.power(Z, 2))/(x*np.power(Z, 2) - 1) )
+        _Gamma2_neg = -np.sqrt( (x+np.power(Z, 2))/(x*np.power(Z, 2) + 1) )
+        # The ambiguity in the plus-or-minus sign  can be resolved by considering the reflection coefficient Gamma3
+        # calculated from S11 alone 
+        _sign_Gamma3 = np.sign(_Gamma3)
+        # Check that the sign of the reflection coefficient Gamma3 is the same as the sign of the square root
+        _Gamma2 = np.where(_sign_Gamma3 == np.sign(_Gamma2_plus), _Gamma2_plus, _Gamma2_neg)
+
+        return _Gamma2
+    
+    def reflection_coefficient3(self, f, S11, Z, L):
+        """
+        Calculate the reflection coefficient Γ3 from S11, Z and L.
+        """
+        _gamma0 = self.gamma(f, self.lam_c, 1, 1)  # Propagation constant
+        _alpha = np.exp(-2*_gamma0*L)
+        term1 = _alpha*(np.power(Z, 2) - 1)
+
+        sqrt_term_1 = np.power(_alpha, 2) * np.power(Z, 4)
+        sqrt_term_2 = 2 *  np.power(Z, 2) * (2*S11 - np.power(_alpha, 2)) 
+        sqrt_term = np.sqrt(sqrt_term_1 + sqrt_term_2 + np.power(_alpha, 2))
+        
+        nominator_plus = term1 + np.sqrt(sqrt_term)
+        nominator_neg = term1 - np.sqrt(sqrt_term)
+        denominator = 2*S11*(np.power(Z, 2))
+
+        _Gamma3_plus = nominator_plus / denominator
+        _Gamma3_neg = nominator_neg / denominator
+
+        # The correct root is the one that satisfies the condition |Gamma| <= 1
+        _Gamma3 = np.where(np.abs(_Gamma3_plus) <= 1, _Gamma3_plus, _Gamma3_neg)
+        
+        return _Gamma3
 
     # ==================================================================================================================
     # 2-Port Solution Where Position is Determined Solely by airline L_air and L
