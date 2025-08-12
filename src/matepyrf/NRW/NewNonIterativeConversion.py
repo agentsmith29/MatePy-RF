@@ -14,8 +14,8 @@ class NewNonIterative(NRWBase):
         super().__init__(measurement_data, f_c= f_c, L=L, l_p1=l_p1, l_p2=l_p2)
 
      
-        self.mu_r = self.permeability(self.f, self.S11, self.S21, self.n)
-        self.eps_r = self.permittivity(self.f, self.S11, self.S21, 1, self.n)
+        self.mu_r = self.permeability(self.freq, self.S11, self.S21, self.n)
+        self.eps_r = self.permittivity(self.freq, self.S11, self.S21, 1, self.n)
         # filter all values that are < 10 and >= 1 in self.eps_r
         #self.eps_r = np.where(np.abs(self.eps_r) < 10, 10, self.eps_r)
         #self.eps_r = np.where(np.abs(self.eps_r) >= 1, 1, self.eps_r)
@@ -32,7 +32,7 @@ class NewNonIterative(NRWBase):
 
         mu_eff = lam_og*delta*beta
         self.logger.debug(f"Effective permeability mu_eff = {self.rect(mu_eff)}")
-        return np.zeros_like(self.f) + 1  # ensure mu_r is an array of the same shape as f
+        return np.zeros_like(self.freq) + 1  # ensure mu_r is an array of the same shape as f
         
     def eps_eff(self, lam_og, beta, delta):
         """
@@ -59,13 +59,13 @@ class NewNonIterative(NRWBase):
         # self.logger.debug("[4.2]  Calculate beta = 1/Lambda")
         _beta = self.calc_beta(_alpha, self.sample_length, n)
         # self.logger.debug("[4.3]  Calculate delta = (1 + Gamma) / (1 - Gamma)")
-        _delta = self.calc_delta(_Gamma)
+        _delta = self.calc_z(_Gamma)
         # self.logger.debug("[4.4]  Caculate lam_og = 1 / (np.sqrt((1/lam_0**2) - 1/np.power(lam_c**2)))")
-        _lam_og = self.lam_og(_lam_0, self.lam_c)
+        _lam_og = self.calc_lam_og(_lam_0, self.lam_c)
 
         mu_r = _beta * _delta * _lam_og
         self.logger.info(f"Calculated relative permeability mu_r(n = {n}) = {mu_r}")
-        return np.zeros_like(self.f) + 1  # ensure mu_r is an array of the same shape as f
+        return np.zeros_like(self.freq) + 1  # ensure mu_r is an array of the same shape as f
 
     def permittivity(self, f, S11, S21, mu_r, n: int):
         """
@@ -81,9 +81,9 @@ class NewNonIterative(NRWBase):
         # self.logger.debug("[4.2]  Calculate beta = 1/Lambda")
         _beta = self.calc_beta(_alpha, self.sample_length, n)
         # self.logger.debug("[4.3]  Calculate delta = (1 + Gamma) / (1 - Gamma)")
-        _delta = self.calc_delta(_Gamma)
+        _delta = self.calc_z(_Gamma)
         # self.logger.debug("[4.4]  Caculate lam_og = 1 / (np.sqrt((1/lam_0**2) - 1/np.power(lam_c**2)))")
-        _lam_og = self.lam_og(_lam_0, self.lam_c)
+        _lam_og = self.calc_lam_og(_lam_0, self.lam_c)
 
         _eps_eff = self.eps_eff(_lam_og, _beta, _delta)
         # if mu_r is None:
@@ -91,7 +91,7 @@ class NewNonIterative(NRWBase):
         # else:
         #     _mu_eff = mu_r
         #     self.mu_r = np.zeros_like(self.f) + _mu_eff  # ensure mu_r is an array of the same shape as f
-        _mu_eff = np.zeros_like(self.f) + mu_r  # ensure mu_r is an array of the same shape as f
+        _mu_eff = np.zeros_like(self.freq) + mu_r  # ensure mu_r is an array of the same shape as f
 
         eps_r = ( (1 - (np.power(_lam_0, 2) / np.power(self.lam_c, 2)) )*_eps_eff + 
                  ((np.power(_lam_0, 2) /np.power(self.lam_c, 2)))*(1/_mu_eff) )

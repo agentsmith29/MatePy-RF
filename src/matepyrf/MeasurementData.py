@@ -25,7 +25,7 @@ class MeasurementData():
         self.waveguide_system = waveguide_system
         self.logger.info(f"Waveguide system: {self.waveguide_system}")
 
-        self.measurement_data = measurement_data
+        self.measurement_data: rf.Network = measurement_data
         self.logger.info(f"Taking measurement data: \n{measurement_data}")
 
         self.f_c = waveguide_system.cutoff_frequency()  # cutoff frequency in Hz
@@ -41,9 +41,7 @@ class MeasurementData():
         self._s_params = self._create_s_params_dataframe(self.measurement_data)#, clip=(1026, 1028)
         self._deembedd(l_p1=l_p1, l_p2=l_p2)  # de-embed S-parameters based on the positions of the sample from port1 and port2
 
-        self.mu_r = np.zeros_like(self.f)  # relative permeability, initialized to 1
-        self.eps_r = np.zeros_like(self.f)  # relative permeability, initialized to 
-        
+
 
         # Storing temporary calulöation resuls
         self._tmp_folder = pathlib.Path("tmp")  # Temporary folder for storing calculation results
@@ -70,9 +68,10 @@ class MeasurementData():
             f = f[clip[0]:clip[1], :]
 
         _s_params = pd.DataFrame(
-            columns=['freq', 'S11', 'S12', 'S21', 'S22', 'S11dB', 'S12dB', 'S21dB', 'S22dB'],
+            columns=['freq', 'lam0', 'S11', 'S12', 'S21', 'S22', 'S11dB', 'S12dB', 'S21dB', 'S22dB'],
         )
         _s_params['freq'] = f.flatten()  # frequency in Hz
+        _s_params['lam0'] = c_const / _s_params['freq']  # free space wavelength in m
         _s_params['S11'] = s_data[:, 0]  # S11 parameter
         _s_params['S12'] = s_data[:, 1]  # S12 parameter
         _s_params['S21'] = s_data[:, 2]  # S21 parameter
@@ -108,7 +107,7 @@ class MeasurementData():
         """
         Returns the S11 parameter as a numpy array.
         """
-        return self.s_params['S11'].values
+        return self.s_params['S11']
     
     @S11.setter
     def S11(self, value):
@@ -122,7 +121,7 @@ class MeasurementData():
         """
         Returns the S11 parameter in dB as a numpy array.
         """
-        return self.s_params['S11dB'].values
+        return self.s_params['S11dB']
     
     @S11dB.setter
     def S11dB(self, value):
@@ -137,7 +136,7 @@ class MeasurementData():
         """
         Returns the S21 parameter as a numpy array.
         """
-        return self.s_params['S21'].values
+        return self.s_params['S21']
     
     @S21.setter
     def S21(self, value):
@@ -151,7 +150,7 @@ class MeasurementData():
         """
         Returns the S21 parameter in dB as a numpy array.
         """
-        return self.s_params['S21dB'].values
+        return self.s_params['S21dB']
     
     @S21dB.setter
     def S21dB(self, value):
@@ -166,7 +165,7 @@ class MeasurementData():
         """
         Returns the S12 parameter as a numpy array.
         """
-        return self.s_params['S12'].values
+        return self.s_params['S12']
     
     @S12.setter
     def S12(self, value):
@@ -180,7 +179,7 @@ class MeasurementData():
         """
         Returns the S12 parameter in dB as a numpy array.
         """
-        return self.s_params['S12dB'].values
+        return self.s_params['S12dB']
     
     @S12dB.setter
     def S12dB(self, value):
@@ -195,7 +194,7 @@ class MeasurementData():
         """
         Returns the S22 parameter as a numpy array.
         """
-        return self.s_params['S22'].values
+        return self.s_params['S22']
     
     @S22.setter
     def S22(self, value):
@@ -209,7 +208,7 @@ class MeasurementData():
         """
         Returns the S22 parameter in dB as a numpy array.
         """
-        return self.s_params['S22dB'].values
+        return self.s_params['S22dB']
     
     @S22dB.setter
     def S22dB(self, value):
@@ -220,18 +219,32 @@ class MeasurementData():
 
     # ------------------------------------------------------------------------------------------------------------------
     @property
-    def f(self):
+    def freq(self):
         """
         Returns the frequency as a numpy array.
         """
-        return self.s_params['freq'].values
+        return self.s_params['freq']
     
-    @f.setter
-    def f(self, value):
+    @freq.setter
+    def freq(self, value):
         """
         Sets the frequency in the S-parameters DataFrame.
         """
         self.s_params['freq'] = value
+
+    @property
+    def lam0(self):
+        """
+        Returns the free space wavelength as a numpy array.
+        """
+        return self.s_params['lam0']
+    
+    @lam0.setter
+    def lam0(self, value):
+        """
+        Sets the free space wavelength in the S-parameters DataFrame.
+        """
+        self.s_params['lam0'] = value
 
     # ==================================================================================================================
     #

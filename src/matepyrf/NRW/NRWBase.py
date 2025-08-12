@@ -29,6 +29,20 @@ See the following publications for further details:
 [2] https://nvlpubs.nist.gov/nistpubs/Legacy/TN/nbstechnicalnote1355r.pdf
 """
 
+# UNicode characters for Greek letters, for better readability in the log output
+STR_Alpha = ud.lookup("GREEK CAPITAL LETTER ALPHA")
+STR_alpha = ud.lookup("GREEK SMALL LETTER ALPHA")
+STR_Beta = ud.lookup("GREEK CAPITAL LETTER BETA")
+STR_beta = ud.lookup("GREEK SMALL LETTER BETA")
+STR_Gamma = ud.lookup("GREEK CAPITAL LETTER GAMMA")
+STR_gamma = ud.lookup("GREEK SMALL LETTER GAMMA")
+STR_Delta = ud.lookup("GREEK CAPITAL LETTER DELTA")
+STR_delta = ud.lookup("GREEK SMALL LETTER DELTA")
+STR_Lambda = ud.lookup("GREEK CAPITAL LETTER LAMDA")
+STR_lambda = ud.lookup("GREEK SMALL LETTER LAMDA")
+STR_pi = ud.lookup("GREEK SMALL LETTER PI")
+STR_tau = ud.lookup("GREEK SMALL LETTER TAU")
+
 class TqdmToLogger(io.StringIO):
     """
         Output stream for TQDM which will output to logger module instead of
@@ -71,16 +85,19 @@ class NRWBase(MeasurementData):
         self.logger = logging.getLogger(__name__)
         self.tqdm_out = TqdmToLogger(self.logger,level=logging.INFO)
         super().__init__(measurement_data, waveguide_system, sample_length=L, l_p1=l_p1, l_p2=l_p2)
-        # remove the 10^9 from the frequency values in the measurement data
-                
-        self.dielectric_properties_df = pd.DataFrame(index=self.f, columns=['mu_r'])
+        self.interm_calc_df = self._s_params.copy()  # intermediate calculations DataFrame, copy of the S-parameters DataFrame
+
+        self.mu_r = np.zeros_like(self.freq)  # relative permeability, initialized to 1
+        self.eps_r = np.zeros_like(self.freq)  # relative permeability, initialized to 
         
-        self.X = self.calc_X(self.s_params['S11'], self.s_params['S21'])
-        self.Gamma = self.calc_Gamma1(self.X)
-        self.T = self.calc_T(self.s_params['S11'], self.s_params['S21'], self.Gamma)
         
-        self._scaled_f = measurement_data.frequency.f#/ 1e9  # frequency in Hz
-        self._scaled_f_w = 2*np.pi*self._scaled_f
+        self.X = self.calc_X(self.S11, self.S21)
+        self.Gamma1 = self.calc_Gamma1(self.X)
+        self.Z1 = self.calc_Z1(self.S11, self.S21, self.Gamma1)
+        self.z = self.calc_z(self.Gamma1)
+        self.lam_og = self.calc_lam_og(self.lam0, self.lam_c)
+        
+
         try:
             # self._s_params['tau_mea_gd'] = measurement_data.s21.group_delay.reshape(-1, 1).real
             # self._s_params['tau_mea_S21']  = -np.gradient(np.unwrap(np.angle(measurement_data.s21.s.squeeze())), measurement_data.frequency.w, axis=0).reshape(-1, 1) # group delay in seconds
@@ -89,7 +106,8 @@ class NRWBase(MeasurementData):
             # self._s_params['_T'] = (np.angle(_T))  # store the polynomial fit of the phase of T
             # # _polyfit_T = _polyfit_T(self._scaled_f)  # evaluate the polynomial at the scaled frequency
             # self._s_params['polyfit_T'] = _polyfit_T[0]*self._scaled_f + _polyfit_T[1]  # store the polynomial fit
-            self._s_params['tau_mea']  = -np.gradient(np.unwrap(np.angle(_T)), self._scaled_f_w, axis=0).reshape(-1, 1) # group delay in seconds
+            # group delay in seconds
+            self.tau_mea = self.calc_tau_mea(self.freq, self.Z1)  # group delay in seconds
             # self._s_params['tau_mea'] = -_polyfit_T[0]/(2*np.pi)  # group delay in seconds
             # self._s_params['v_g_mea']  =  self.sample_length / self._s_params['tau_mea'].values
             
@@ -112,26 +130,23 @@ class NRWBase(MeasurementData):
             # self.logger.debug(f"Calculated group delay from measurement data: {  self._s_params['tau_mea'].values}")
         except Exception as e:
             self.logger.warning(f"Group delay data not available: {e}")
-            self._s_params['tau_mea'] = np.zeros((self.f.shape[0], 1)).real  # initialize to zeros if not available
+            self._s_params['tau_mea'] = np.zeros((self.freq.shape[0], 1)).real  # initialize to zeros if not available
             # Add group delay tau_g if available    
 
         self.logger.debug(f"S-Parameters DataFrame:\n{self._s_params}")
         self._s_params.to_excel(f'{self._tmp_folder}/s_parameters.xlsx', index=False)
-        exit()  
         # Save S-Parameters to Excel file
         
         try:
-            self.n = self.estimate_n_from_group_delay()  # estimate the number of wavelengths n
-            # self.n = np.zeros_like(self.f, dtype=int) +4 # initialize n to zeros if estimation fails	
+            #self.n = self.estimate_n_from_group_delay()  # estimate the number of wavelengths n
+            self.n = np.zeros_like(self.freq, dtype=int) # initialize n to zeros if estimation fails	
             # make a ramp from 5 to 7 with n=self.f datapoints
             #self.n = np.round(np.linspace(5, 7, len(self.f)), 0).astype(int)  # initialize n to a ramp from 5 to 7 if estimation fails
         except Exception as e:
             # self.logger.disabled = False
-            self.n = np.zeros_like(self.f, dtype=int)  # initialize n to zeros if estimation fails	
+            self.n = np.zeros_like(self.freq, dtype=int)  # initialize n to zeros if estimation fails	
             self.logger.error(f"Error estimating n: {e}")
-            raise e
-        
-        
+            raise e 
 
         # self.logger.disabled = False
     
@@ -139,18 +154,106 @@ class NRWBase(MeasurementData):
     # Getter and setter
     # ==================================================================================================================
     @property
-    def Gamma(self):
+    def X(self):
+        """
+            Returns the calculated X parameter.
+        """
+        return self.interm_calc_df['X']
+    
+    @X.setter
+    def X(self, value):
+        """
+            Sets the calculated X parameter.
+        """
+        self.interm_calc_df['X'] = value
+    
+    @property
+    def Gamma1(self):
         """
             Returns the reflection coefficient Gamma.
         """
-        return self._s_params['Gamma']
+        return self.interm_calc_df['Gamma1']
+    
+    @Gamma1.setter
+    def Gamma1(self, value):
+        """
+            Sets the reflection coefficient Gamma.
+        """
+        self.interm_calc_df['Gamma1'] = value
    
     @property
-    def T(self):
+    def Z1(self):
         """
             Returns the transmission coefficient T.
         """
-        return self._s_params['T']
+        return self.interm_calc_df['Z1']
+    
+    @Z1.setter
+    def Z1(self, value):
+        """
+            Sets the transmission coefficient T.
+        """
+        self.interm_calc_df['Z1'] = value
+    
+    @property
+    def tau_mea(self):
+        """
+            Returns the measured group delay.
+        """
+        return self._s_params['tau_mea']
+    
+    @tau_mea.setter
+    def tau_mea(self, value):
+        """
+            Sets the measured group delay.
+        """
+        self._s_params['tau_mea'] = value
+    
+    @property
+    def n(self):
+        """
+            Returns the number of wavelengths n to resolve the integer phase ambiguity.
+        """
+        return self._s_params['n']
+    
+    @n.setter
+    def n(self, value):
+        """
+            Sets the number of wavelengths n to resolve the integer phase ambiguity.
+        """
+        self._s_params['n'] = value
+    
+    @property
+    def mu_r(self):
+        """
+            Returns the relative permeability mu_r.
+        """
+        return self.interm_calc_df['mu_r']
+        
+    
+    @mu_r.setter
+    def mu_r(self, value):
+        """
+            Sets the relative permeability mu_r.
+        """
+        self.s_params['mu_r'] = value
+        self.interm_calc_df['mu_r'] = value
+
+    @property
+    def eps_r(self):
+        """
+            Returns the relative permittivity eps_r.
+        """
+        return self.interm_calc_df['eps_r']
+    
+    @eps_r.setter
+    def eps_r(self, value):
+        """
+            Sets the relative permittivity eps_r.
+        """
+        self.s_params['eps_r'] = value
+        self.interm_calc_df['eps_r'] = value
+    
     
     # ==================================================================================================================
     # 
@@ -180,7 +283,7 @@ class NRWBase(MeasurementData):
     # Estimate the integer phase ambiguity value `n` that minimizes the RMS error between calculated and measured 
     # roup delay.
     # ==================================================================================================================
-    def calc_n(self, f, S11, S21, tau_meas, n_range: tuple):
+    def _calculate_errors(self, f, S11, S21, tau_meas, n_range: tuple):
         """
             Estimate the integer phase ambiguity value `n` that minimizes the
             RMS error between calculated and measured group delay.
@@ -332,7 +435,7 @@ class NRWBase(MeasurementData):
             self.logger.error("Not enough frequency points to estimate n.")
             return 0
         self.logger.debug(f"Estimating n from group delay with frequency range {self.s_params['freq'].min()}Hz to {self.s_params['freq'].max()}Hz")
-        err_and_n = self.calc_n(self.s_params['freq'].values, self.s_params['S11'].values, self.s_params['S21'].values, self.s_params['tau_mea'].values, n_range)
+        err_and_n = self._calculate_errors(self.s_params['freq'].values, self.s_params['S11'].values, self.s_params['S21'].values, self.s_params['tau_mea'].values, n_range)
         
         # append the errors to the s_params DataFrame
        
@@ -540,6 +643,7 @@ class NRWBase(MeasurementData):
     #
     # See [1], Page 34, Equation 5 - 7
     # See [2], Page 10, Equation 2.26 - 2.30
+    # Variable notation has been taken from [2] and is used in the code.
     # ==================================================================================================================
     def calc_X(self, S11, S21):
         """
@@ -593,24 +697,22 @@ class NRWBase(MeasurementData):
         [1], Page 34, Equation 5
         [2], Page 10, Equation 2.26
         """
-        _str_GAMMA=ud.lookup("GREEK CAPITAL LETTER GAMMA")
-        self.logger.debug(f"Calculating reflection coefficient {_str_GAMMA} = X + sqrt(X**2 - 1)")
+        self.logger.debug(f"Calculating reflection coefficient {STR_Gamma} = X + sqrt(X^2 - 1)")
         _Gamma_pos = X + np.sqrt(np.power(X,2) - 1)
         _Gamma_neg = X - np.sqrt(np.power(X,2) - 1)
+       
         # Apply the condition |gamma| < 1 element-wise for numpy arrays
         _Gamma = np.where(np.abs(_Gamma_pos) < 1, _Gamma_pos, _Gamma_neg)
-        self.logger.info(f"{_str_GAMMA} = {self.str_array_repr(_Gamma)}")
-        self.logger.debug(f"{_str_GAMMA} = {self.str_array_repr(_Gamma, polar=False)}")
-        self.Gamma = _Gamma
-        self.dielectric_properties_df['Gamma'] = _Gamma
+        self.logger.info(f"{STR_Gamma} = {self.str_array_repr(_Gamma)}")
+        self.logger.debug(f"{STR_Gamma} = {self.str_array_repr(_Gamma, polar=False)}")
         return _Gamma
 
-    def calc_T1(self, S11, S21, Gamma):
+    def calc_Z1(self, S11, S21, Gamma):
         """
-        Calculate the transmission coefficient *T1* for the Nicolson-Ross-Weir procedure from the scattering 
+        Calculate the transmission coefficient *Z1* for the Nicolson-Ross-Weir procedure from the scattering 
         parameters *S11* and *S21* where
         ```
-            T1 = (S11 + S21 - Gamma1) / (1 - (S11  + S21) * Gamma1)
+            Z1 = (S11 + S21 - Gamma1) / (1 - (S11  + S21) * Gamma1)
         ```
         with *Gamma1* 
         ```
@@ -620,101 +722,166 @@ class NRWBase(MeasurementData):
         ```
         def calc_Gamma1(self, X)
         ```
+
+        Args:
+            S11: S-parameter S11, complex numpy array
+            S21: S-parameter S21, complex numpy array
+            Gamma: reflection coefficient Gamma1, complex numpy array
+        Returns:
+            Complex numpy array representing the transmission coefficient *Z1*.
+
         For more details, see the references:
         [1], Page 34, Equation 7
         [2], Page 10, Equation 2.30
         """
         self.logger.debug(f"Calculating transmission coefficient "
-                          f"T = (S11 + S21 - {ud.lookup("GREEK CAPITAL LETTER GAMMA")}) / (1 - (S11  + S21) "
-                          f"* {ud.lookup("GREEK CAPITAL LETTER GAMMA")})")
-        _T = (S11 + S21 - Gamma) / (1 - (S11 + S21) * Gamma)
-        self.logger.info(f"T = {self.str_array_repr(_T)}")
-        self.logger.debug(f"T = {self.str_array_repr(_T, polar=False)}")
-        self.T = _T
-        self.dielectric_properties_df['T'] = _T  
-        return _T
+                          f"Z1 = (S11 + S21 - {STR_Gamma}) / (1 - (S11  + S21) * {STR_Gamma})")
+        _Z1 = (S11 + S21 - Gamma) / (1 - (S11 + S21) * Gamma)
+        self.logger.info(f"Z1 = {self.str_array_repr(_Z1)}")
+        self.logger.debug(f"Z1 = {self.str_array_repr(_Z1, polar=False)}")
+        return _Z1
 
     # ===================================================================================================================
 
-    def lam_og(self, lam_0, lam_c):
+    def calc_tau_mea(self, freq, Z1):
+        """
+            Calculate the measured group delay tau_mea from the angle of the transmission coefficient Z1.
+            ```
+            tau_mea = (1/2*pi) * d(phi)/d(freq)
+            ```
+            with
+            ```
+            phi = np.unwrap(np.angle(Z1))
+            ```
+        """
+        # Check if more than 1 frequency point is available
+        if len(freq) < 2:
+            self.logger.error("Not enough frequency points to calculate group delay.")
+            return np.zeros((len(freq), 1))
+        
+        self.logger.debug(f"Calculating measured group delay tau_mea = -d(unwrap(angle(Z1)))/d(2*pi*freq)")
+        _omega = 2*np.pi*freq
+        _tau_mea = -np.gradient(np.unwrap(np.angle(Z1)), _omega, axis=0).reshape(-1, 1) 
+        return _tau_mea
+
+    # ==================================================================================================================
+    # Simplification of terms, appearing multiple times in the calculations
+    # ==================================================================================================================
+    def calc_lam_og(self, lam_0, lam_c):
         """
         Calculate the free space wavelength at the given frequency.
         lam_og = 1 / (np.sqrt((1/np.power(lam_0,2)) - 1/np.power((lam_c), 2)))
         """
-        _str_lamda = ud.lookup("GREEK SMALL LETTER LAMDA")
-        self.logger.debug(f"Calculating {_str_lamda}_og = 1 / (sqrt((1/({_str_lamda}0^2)) - 1/{_str_lamda}c^2))")
+        
+        self.logger.debug(f"Calculating {STR_lambda}_og = 1 / (sqrt((1/({STR_lambda}0^2)) - 1/{STR_lambda}c^2))")
         lam_og = 1 / (np.sqrt( (1/np.power(lam_0,2)) - (1/np.power(lam_c, 2))) )
-        self.logger.debug(f"{_str_lamda}_og({_str_lamda}0 = {np.round(lam_0,2)}, {_str_lamda}c = {np.round(lam_c,2)}) = {self.polar(lam_og)}")
-        self.logger.debug(f"{_str_lamda}_og({_str_lamda}0 = {np.round(lam_0,2)}, {_str_lamda}c = {np.round(lam_c,2)}) = {self.rect(lam_og)}")
-        self.dielectric_properties_df['lam_og'] = lam_og
+        self.logger.info(f"{STR_lambda}_og({STR_lambda}0 = {self.str_array_repr(np.round(lam_0,2))}, "
+                          f"{STR_lambda}c = {np.round(lam_c,2):.2e}) "
+                          f"= {self.str_array_repr(lam_og)}")
+        self.logger.debug(f"{STR_lambda}_og({STR_lambda}0 = {self.str_array_repr(np.round(lam_0,2))}, "
+                          f"{STR_lambda}c = {np.round(lam_c,2):.2e}) "#
+                          f"= {self.str_array_repr(lam_og, polar=False)}")
         return lam_og
-
-    def calc_alpha(self, T: complex, n: int):
+    
+    def calc_z(self, Gamma):
         """
-            Calculate alpha = ln(1/T), the natural logarithm of (1/T). 
-            Equation has an infinite number of roots since the imaginary part of the term ln(1/T) is equal to (j*2*pi*n), 
+        Calculate the normalized impedance *z*, defined as the ratio of the reflection coefficient Gamma of 
+        the waveguide
+        ```
+        z = (1 + Gamma) / (1 - Gamma)
+        ```
+        """
+        # Placeholder for Gamma, this should be calculated or provided
+
+        self.logger.debug(f"Calculating z = (1+{STR_Gamma})/(1-{STR_Gamma})")
+        delta = (1 + Gamma) / (1 - Gamma)
+        self.logger.info(f"z = (1+{STR_Gamma})/(1-{STR_Gamma}) = {self.str_array_repr(delta)}")
+        self.logger.debug(f"z = (1+{STR_Gamma})/(1-{STR_Gamma}) = {self.str_array_repr(delta, polar=False)}")
+        return delta
+    
+    # ==================================================================================================================
+    # Simplifaction of some terms, for calulation 1/Lambda
+    # ==================================================================================================================
+    def calc_alpha(self, Z1: np.ndarray, n: int) -> np.ndarray:
+        """
+            Calculate the intermediate value *alpha*
+            ```
+            alpha = ln(1/Z1)
+            ```
+            the natural logarithm of (1/Z1). 
+            Equation has an infinite number of roots since the imaginary part of the term ln(1/Z1) is equal to (j*2*pi*n), 
             where n = 0, +-1, +-2, ..., the integer of (L/lam_g) where lam_g is the group delay wavelength.
             Implementation:
-            ln(Mag(1/T)) + j * (Arg(1/T) + 2 * pi * n)
+            ```
+            np.log(np.abs(1/Z1)) + 1j * np.unwrap(np.angle(1/Z1, False)) + 2*np.pi*n
+            ```
 
             args:
-                T: transmission coefficient
-                n: number of root
+                Z1: transmission coefficient, defined as `(S11 + S21 - Gamma1) / (1 - (S11  + S21) * Gamma1)`
+                n: number of root, to resolve the phase ambiguity, integer value. See [1] and [2] for more details.
+            
+            Returns:
+                Complex numpy array representing the intermediate value *alpha*.
+                
+            [1], Page 34, Equation 1.5
+            [2], Page 16, Equation 2.45
         """
-        _str_alpha = ud.lookup("GREEK SMALL LETTER ALPHA")
-        self.logger.debug(f"Calculating {ud.lookup("GREEK SMALL LETTER ALPHA")} = ln(1/T) for n = {n}")
-        ln_inv_t_mag = np.log(np.abs(1/T))
-        ln_inv_t_imag = np.unwrap(np.angle(1/T, False)) + 2*np.pi*n  # This is the argument of 1/T
-        ln_1_T = ln_inv_t_mag + 1j * ln_inv_t_imag
-        self.logger.info(f"{_str_alpha}(n={n}) = ln(1/T) = ln({np.abs(1/T)}) + j({np.angle(1/T, False)}+2*pi*{n}) ={self.polar(ln_1_T)}")
-        self.logger.debug(f"{_str_alpha}(n={n}) = ln(1/T) = ln({np.abs(1/T)}) + j({np.angle(1/T, False)}+2*pi*{n}) = {self.rect(ln_1_T)}")
-        self.dielectric_properties_df['alpha'] = ln_1_T
-        return ln_1_T
+        self.logger.debug(f"Calculating {STR_alpha} = ln(1/Z1) for n = {n}")
+        ln_inv_Z1_mag = np.log(np.abs(1/Z1))
+        ln_inv_Z1_imag = np.unwrap(np.angle(1/Z1, False)) + 2*np.pi*n  # This is the argument of 1/T
+        ln_1_Z1 = ln_inv_Z1_mag + 1j * ln_inv_Z1_imag
+        self.logger.info(f"{STR_alpha}(n={n}) = ln(1/T) = ln({self.str_array_repr(np.abs(1/Z1))}) + j({self.str_array_repr(np.angle(1/Z1, False))}+2*pi*{n}) ={self.str_array_repr(ln_1_Z1)}")
+        self.logger.debug(f"{STR_alpha}(n={n}) = ln(1/T) = ln({self.str_array_repr(np.abs(1/Z1))}) + j({self.str_array_repr(np.angle(1/Z1, False))}+2*pi*{n}) = {self.str_array_repr(ln_1_Z1, polar=False)}")
+        return ln_1_Z1
 
-    def calc_beta(self, alpha, L, n):
+    def calc_beta(self, alpha, sample_length) -> np.ndarray:
         """
-        Calculate beta = 1/(Lamda) = - ( 1/(2*np.pi*l) * ln(1/T))^2 
-        beta = (1/(2*np.pi*L)) * alpha(T, n) )^2
-        [1], Page 19, Equation 1.5
-        arguments:
-            alpha: complex value of alpha
-            L: length of the sample in m
-            n: integer phase ambiguity value
+        Calculate the intermediate value *1/Lamda = beta*, defined as
+        ```
+        beta = 1/(Lamda) = sqrt( -( 1/(2*np.pi*L) * ln(1/Z1))^2 ) = sqrt( -( 1/(2*np.pi*L) *alpha)^2 )
+        ```
+        where *alpha* is the intermediate value calculated from the transmission coefficient *Z1* and the integer phase 
+        ambiguity value *n*.
+        ```
+        alpha = ln(1/Z1) = abs(ln(1/Z1)) + j * (arg(1/Z1) + 2 * pi * n)
+        ```
+        and is defined in the method
+        ```
+        def calc_alpha(self, Z1, n)
+        ```
+        The sign of the square root is chosen such that the real part of *beta* is positive, i.e., *Re(beta) > 0*.
+        
+        Args:
+            alpha: complex value of `alpha = ln(1/Z1)`. For resolving the phase ambiguity see [1] and [2]
+            sample_length: length of the sample in m
+
+        Returns:
+            beta: Complex numpy array representing the intermediate value *1/(Lamda)*.
+
+        References:
+            [1], Page 34, Equation 10 and 11
+            [2], Page 16, Equation 2.48 and 2.49
         """
         _str_beta = ud.lookup("GREEK SMALL LETTER BETA")
         _str_Lambda = ud.lookup("GREEK CAPITAL LETTER LAMDA")
         _str_alpha = ud.lookup("GREEK SMALL LETTER ALPHA")
         _str_pi = ud.lookup("GREEK SMALL LETTER PI")
         # Placeholder for eps_r and mu_r, these should be calculated or provided
-        beta2 = -np.pow( (1/(2*np.pi*L)) * alpha, 2)
-        self.logger.debug(f"Calculating {_str_beta}(n = {n}, L = {L:.2e})^2 = 1/({_str_Lambda}^2) = -(1/(2{_str_pi}L) * {_str_alpha})^2")
-        self.logger.info(f"{_str_beta}(n = {n}, L = {L:.2e})^2 = -(1/(2{_str_pi}L) * {_str_alpha})^2) = {self.polar(beta2)}")
-        self.logger.debug(f"{_str_beta}(n = {n}, L = {L:.2e})^2 = -(1/(2{_str_pi}L) * {_str_alpha})^2) = {self.rect(beta2)}")
+        beta2 = -np.pow( (1/(2*np.pi*sample_length)) * alpha, 2)
+        self.logger.debug(f"Calculating {_str_beta}(L = {sample_length:.2e})^2 = 1/({_str_Lambda}^2) = -(1/(2{_str_pi}L) * {_str_alpha})^2")
+        self.logger.info(f"{_str_beta}(L = {sample_length:.2e})^2 = -(1/(2{_str_pi}L) * {_str_alpha})^2) = {self.str_array_repr(beta2)}")
+        self.logger.debug(f"{_str_beta}(L = {sample_length:.2e})^2 = -(1/(2{_str_pi}L) * {_str_alpha})^2) = {self.str_array_repr(beta2, polar=False)}")
         beta_neg =  -np.sqrt(beta2)
         beta_pos = np.sqrt(beta2)
         # Real(beta) > 0
         beta = np.where(np.real(beta_pos) >= 0, beta_pos, beta_neg)
-        self.logger.info(f"{_str_beta}(n = {n}, L = {L:.2e}) = sqrt({_str_beta}^2) = {self.rect(beta)}")
-        self.logger.debug(f"{_str_beta}(n = {n}, L = {L:.2e}) = sqrt({_str_beta}^2) = {self.polar(beta)}")
-        self.dielectric_properties_df['beta'] = beta
+        self.logger.info(f"{_str_beta}(L = {sample_length:.2e}) = sqrt({_str_beta}^2) = {self.str_array_repr(beta)}")
+        self.logger.debug(f"{_str_beta}(L = {sample_length:.2e}) = sqrt({_str_beta}^2) = {self.str_array_repr(beta, polar=False)}")
         return beta
-        
-    def calc_delta(self, Gamma):
-        """
-        Calculate delta = (1+Gamma)/(1-Gamma)
-        delta = (1 + Gamma) / (1 - Gamma)
-        [1], Page 19, Equation 1.4
-        """
-        # Placeholder for Gamma, this should be calculated or provided
-        _str_delta = ud.lookup("GREEK SMALL LETTER DELTA")
-        _str_Gamma = ud.lookup("GREEK CAPITAL LETTER GAMMA")
-        self.logger.debug(f"Calculating {_str_delta} = (1+{_str_Gamma})/(1-{_str_Gamma})")
-        delta = (1 + Gamma) / (1 - Gamma)
-        self.logger.info(f"{_str_delta} = (1+{_str_Gamma})/(1-{_str_Gamma}) = {self.polar(delta)}")
-        self.logger.debug(f"{_str_delta} = (1+{_str_Gamma})/(1-{_str_Gamma}) = {self.rect(delta)}")
-        self.dielectric_properties_df['delta'] = delta
-        return delta
-    
+
+    # ==================================================================================================================
+
+
     # ==================================================================================================================
     # 
     # ==================================================================================================================
@@ -763,16 +930,19 @@ class NRWBase(MeasurementData):
             eps_r: real part of the permittivity (numpy array)
             tanDelta: loss tangent (numpy array)
         """
+        if isinstance(permittivity, pd.Series):
+            permittivity = permittivity.values
+
         eps_r = np.abs(permittivity).astype(float)
-        self.dielectric_properties_df['abs(eps_r)'] = eps_r
+        self.interm_calc_df['abs(eps_r)'] = eps_r
         # Filter real part values to be non-negative and greater than 1
         #eps_r = np.clip(eps_r, 1, None)  # Ensure eps_r >= 1
         tanDelta = (permittivity.imag / permittivity.real).astype(float)
-        self.dielectric_properties_df['tanDelta'] = tanDelta
+        self.interm_calc_df['tanDelta'] = tanDelta
         # Filter loss tangent values to be non-negative and less than 1
         #tanDelta = np.clip(tanDelta, 0, 1)
 
-        self.logger.info(f"Converted complex permittivity to real part: {eps_r} and loss tangent: {tanDelta}")
+        self.logger.info(f"Converted complex permittivity to real part: {self.str_array_repr(eps_r)} and loss tangent: {self.str_array_repr(tanDelta)}")
         return eps_r, tanDelta
 
     def calculate_trendline(self, x, y, degree=10):
@@ -799,32 +969,18 @@ class NRWBase(MeasurementData):
         self.fig = fig
 
         fig.suptitle(
-            self.__class__.__name__ + f" - L={self.sample_length} m, f_c={self.f_c/1e9:.2f} GHz",
+            self.__class__.__name__ + f" - L={self.sample_length:0.3e} m, f_c={self.f_c/1e9:.2f} GHz",
             fontsize=16
         )
 
-        # Plot 1: S11 and S12 in dB
-        ax1 = axs[0]
-        ax1.plot(self.f, self.S11dB, label='S11 (dB)', color='blue')
-        ax1.set_xlabel('Frequency (Hz)')
-        ax1.set_ylabel('S11 (dB)', color='blue')
-        ax1.tick_params(axis='y', labelcolor='blue')
-
-        ax1b = ax1.twinx()
-        ax1b.plot(self.f, self.S21dB, label='S21 (dB)', color='red', linestyle='--')
-        ax1b.set_ylabel('S21 / Power Sum (dB)', color='red')
-        ax1b.tick_params(axis='y', labelcolor='red')
-
-        lines1, labels1 = ax1.get_legend_handles_labels()
-        lines2, labels2 = ax1b.get_legend_handles_labels()
-        ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+        self.plot_s_params_db(ax=axs[0])  # Plot S11 and S21 in dB
 
         # Plot 2: n vs frequency
         ax2 = axs[1]
         ax2b = ax2.twinx()
         try:
-            ax2.plot(self.f, self.n, label='Number of Wavelengths (n) (Interpolated)', linewidth=2, color='green')
-            ax2.plot(self.f, self.s_params['n_orig'], label='Number of Wavelengths (n) (Calculated)', linestyle='--', color='orange')
+            ax2.plot(self.freq, self.n, label='Number of Wavelengths (n) (Interpolated)', linewidth=2, color='green')
+            # ax2.plot(self.freq, self.n, label='Number of Wavelengths (n) (Calculated)', linestyle='--', color='orange')
             # ax2.plot(self.f, self.Gamma, label='Reflection coefficient (Gamma)')
             # ax2.plot(self.f, self.T, label='Transmission_coefficient (T)')
             ax2.set_xlabel('Frequency (Hz)')
@@ -837,44 +993,15 @@ class NRWBase(MeasurementData):
         # self._plot_interpolation_boxes(ax2)  # Add interpolation boxes to the eps_r plot
 
         # Plot 3: eps_r and tanDelta
-        ax3 = axs[2]
-        self.p_epsr, = ax3.plot(self.f, self.abs_epsr, label='Permittivity Magnitude', color='blue')
-        _f, epsr_trend = self.calculate_trendline(self.f, self.abs_epsr, degree=1)
-        ax3.plot(_f, epsr_trend, label='tepsr', color='green')
-        # set yaxis to 1
-        # ax3.set_ylim(1, self.eps_r.real.max() * 1.1)  # Ensure y-axis starts at 1   
-        ax3.set_xlabel('Frequency (Hz)')
-        ax3.set_ylabel('Relative Permittivity (eps_r)', color='blue')
-        ax3.tick_params(axis='y', labelcolor='blue')
-
-        ax3b = ax3.twinx()
-        self.p_tan, = ax3b.plot(self.f, self.tanDelta, label='Loss Tangent', color='red', linestyle='--')
-        ax3b.set_ylabel('Loss Tangent (tanDelta)', color='red')
-        ax3b.tick_params(axis='y', labelcolor='red')
-
-        lines3, labels3 = ax3.get_legend_handles_labels()
-        lines4, labels4 = ax3b.get_legend_handles_labels()
-        ax3.legend(lines3 + lines4, labels3 + labels4, loc='upper right')
-
+        self.plot_dielectric_losses(ax=axs[2], trendline=False)  # Use the new method to plot eps_r and tanDelta
+        self.plot_magnetic_losses(ax=axs[3], trendline=False)  # Use the new method to plot eps_r and tanDelta
         # self._plot_interpolation_boxes(ax3)  # Add interpolation boxes to the eps_r plot
 
+        # tight layout to adjust spacing between subplots
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust layout to fit title
         
 
-        # Plot 4: mu_r (real part)
-        ax4 = axs[3]
-        self.p_mu, = ax4.plot(self.f, self.mu_r.real, label='Real Permeability (mu_r)', color='blue')
-        ax4.set_xlabel('Frequency (Hz)')
-        ax4.set_ylabel('Relative Permeability (mu_r)', color='blue')
-        ax4.tick_params(axis='y', labelcolor='blue')
-        ax4.legend(loc='upper right')
-
-        ax4b = ax4.twinx()
-        self.p_mu_imag, = ax4b.plot(self.f, self.mu_r.imag, label='Imaginary Permeability (mu_r)', color='red', linestyle='--')
-        ax4b.set_ylabel('Imaginary Permeability (mu_r)', color='red')
-        ax4b.tick_params(axis='y', labelcolor='red')
-        lines5, labels5 = ax4.get_legend_handles_labels()   	
-        lines6, labels6 = ax4b.get_legend_handles_labels()
-        ax4.legend(lines5 + lines6, labels5 + labels6, loc='upper right')
+        
 
         # Add a slider below the plots
         #ax_slider = fig.add_axes([0.2, 0.05, 0.65, 0.03])
@@ -912,11 +1039,110 @@ class NRWBase(MeasurementData):
 
 
         # self.slider.on_changed(update)
+    def plot_s_params_db(self, ax=None):
+         # Plot 1: S11 and S12 in dB
+        ax.title.set_text(f'S-Parameters in dB: {self.measurement_data.name}')
+        ax.plot(self.freq, self.S11dB, label='S11 (dB)', color='blue')
+        ax.set_xlabel('Frequency (Hz)')
+        ax.set_ylabel('S11 (dB)', color='blue')
+        ax.tick_params(axis='y', labelcolor='blue')
+
+        axS21 = ax.twinx()
+        axS21.plot(self.freq, self.S21dB, label='S21 (dB)', color='red')
+        axS21.set_ylabel('S21 (dB)', color='red')
+        axS21.tick_params(axis='y', labelcolor='red')
+
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = axS21.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, loc='upper right')
+
+    def plot_lossTan_dissapFactor(self, ax=None, trendline=True):
+        # Plot 3: eps_r and tanDelta
+        ax.title.set_text('Realitve Permittivtiy, Loss tangent: $\epsilon_r = \epsilon_r^{\prime}(1-j \mathrm{tan}\delta)$')
+        self.p_epsr, = ax.plot(self.freq, self.eps_r.values.real, label='$\epsilon_r^{\prime}$', color='blue')
+        
+        if trendline:
+            _f, epsr_trend = self.calculate_trendline(self.freq, self.abs_epsr, degree=1)
+            ax.plot(_f, epsr_trend, label='Trend $|\epsilon_r|$', color='green', linestyle='--')
+        # set yaxis to 1
+        # ax3.set_ylim(1, self.eps_r.real.max() * 1.1)  # Ensure y-axis starts at 1   
+        ax.set_xlabel('Frequency (Hz)')
+        ax.set_ylabel('(Real part) Relative Permittivity ($\epsilon_r$)', color='blue')
+        ax.tick_params(axis='y', labelcolor='blue')
+
+        _axb = ax.twinx()
+        self.p_tan, = _axb.plot(self.freq, self.tanDelta, label='Loss Tangent $tan\delta$', color='red')
+        if trendline:
+            _axb.set_ylabel('Loss Tangent ($tan\delta$)', color='red')
+            _axb.tick_params(axis='y', labelcolor='red')
+
+        lines3, labels3 = ax.get_legend_handles_labels()
+        lines4, labels4 = _axb.get_legend_handles_labels()
+        ax.legend(lines3 + lines4, labels3 + labels4, loc='upper right')
+
+    def plot_dielectric_losses(self, ax=None, trendline=True):
+        # Plot 3: eps_r and tanDelta
+        ax.title.set_text('Dielectric Losses: $\epsilon_r = \epsilon_r^{\prime} - j  \epsilon_r^{\prime\prime}$')
+        self.p_epsr, = ax.plot(self.freq, self.eps_r.values.real, label='(Real part) $\epsilon_r^{\prime}$', color='blue')
+        
+        if trendline:
+            _f, eps_real_trend = self.calculate_trendline(self.freq, self.eps_r.values.real, degree=1)
+            ax.plot(_f, eps_real_trend, label='Trend $\epsilon_r^{\prime}$', color='green', linestyle='--')
+        # set yaxis to 1
+        # ax3.set_ylim(1, self.eps_r.real.max() * 1.1)  # Ensure y-axis starts at 1   
+        ax.set_xlabel('Frequency (Hz)')
+        ax.set_ylabel('$\epsilon_r^{\prime}$ (Real part)', color='blue')
+        ax.tick_params(axis='y', labelcolor='blue')
+
+        _axb = ax.twinx()
+        self.p_tan, = _axb.plot(self.freq, self.eps_r.values.imag, label='(Imaginary part) $\epsilon_r^{\prime\prime}$', color='red')
+        
+        if trendline:
+            _f, eps_imag_trend = self.calculate_trendline(self.freq, self.eps_r.values.imag, degree=1)
+            _axb.plot(_f, eps_imag_trend, label='Trend $\epsilon_r^{\prime\prime}$', color='orange', linestyle='--')
+
+        _axb.set_ylabel('$\epsilon_r^{\prime\prime}$ (Imaginary part)', color='red')
+        _axb.tick_params(axis='y', labelcolor='red')
+
+        lines3, labels3 = ax.get_legend_handles_labels()
+        lines4, labels4 = _axb.get_legend_handles_labels()
+        ax.legend(lines3 + lines4, labels3 + labels4, loc='upper right')
+
+        # self._plot_interpolation_boxes(ax3)  # Add interpolation boxes to the eps_r plot
+
+    def plot_magnetic_losses(self, ax=None, trendline=True):
+        # Plot 4: mu_r (real part)
+        ax.title.set_text('Magnetic losses: $\mu_r = \mu_r^{\prime} - j  \mu_r^{\prime\prime}$')
+        self.p_mu, = ax.plot(self.freq, self.mu_r.values.real, label='Real Permeability ($\mu_r^{\prime}$)', color='blue')
+       
+        if trendline:
+            _f, mu_real_trend = self.calculate_trendline(self.freq, self.mu_r.values.real, degree=1)
+            ax.plot(_f, mu_real_trend, label='Trend $\epsilon_r^{\prime}$', color='green', linestyle='--')
+        
+        ax.set_xlabel('Frequency (Hz)')
+        ax.set_ylabel('Real Permeability ($\mu_r^{\prime}$)', color='blue')
+        ax.tick_params(axis='y', labelcolor='blue')
+        ax.legend(loc='upper right')
+
+        _axb = ax.twinx()
+        self.p_mu_imag, = _axb.plot(self.freq, self.mu_r.values.imag, label='Imaginary Permeability ($\mu_r^{\prime\prime}$)', color='red')
+        
+        if trendline:
+            _f, mu_imag_trend = self.calculate_trendline(self.freq, self.mu_r.values.imag, degree=1)
+            _axb.plot(_f, mu_imag_trend, label='Trend $\mu_r^{\prime}$', color='orange', linestyle='--')
+
+        _axb.set_ylabel('Imaginary Permeability ($\mu_r^{\prime\prime}$)', color='red')
+        _axb.tick_params(axis='y', labelcolor='red')
+        lines5, labels5 = ax.get_legend_handles_labels()   	
+        lines6, labels6 = _axb.get_legend_handles_labels()
+        ax.legend(lines5 + lines6, labels5 + labels6, loc='upper right')
+
+
 
     def _plot_interpolation_boxes(self, ax):
                 # add a red box at every place, where self._s_params['intp'] is true
         intp = self._s_params['intp'].values
-        freqs = self.f  # frequency array (same length as intp)
+        freqs = self.freq  # frequency array (same length as intp)
 
         in_segment = False
         start_freq = None
@@ -1139,7 +1365,7 @@ class NRWBase(MeasurementData):
         return eps_real
 
     # ==================================================================================================================
-    # 2-Port Solution Where Position is Determined Solely by airline L_air and L
+    # 2-Port Solution Where position is determined solely by airline L_air and L
     # ==================================================================================================================
     def calc_x(self, f, S11, S21, S12, S22, L_air, L):
         """
