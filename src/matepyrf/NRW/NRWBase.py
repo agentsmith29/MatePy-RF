@@ -308,6 +308,7 @@ class NRWBase(MeasurementData):
      
         errors  = pd.DataFrame(index=f)  # DataFrame to store errors for each n
         tau = pd.DataFrame(index=f)  # DataFrame to store calculated tau for each n
+        mu_r_df = pd.DataFrame(index=f)  # DataFrame to store mu_r for each n
         _tmp_calc  = []#pd.DataFrame(index=f)  # DataFrame to store errors for each n
         
         #- set nrange t0 4
@@ -375,13 +376,18 @@ class NRWBase(MeasurementData):
 
             # eps_re = [self.kkr(f, _epsimg)  for _epsimg, _f in  zip(np.imag(eps_r), f)] # calculate the scalar Kramers-Kronig relation for eps_r
             _sample_length, _lam_c, _product, _d_product_df, _term1, _term2, _sqrt_term, _numerator, _denominator = interm_result
-            err = np.abs((tau_calc.real - self.tau_mea.values.real).real)  # calculate the error between calculated and measured group delay
+            # calculate the error between calculated and measured group delay
+            err = np.abs((tau_calc.real - self.tau_mea.values.real).real) 
+            # calculate the deviation of mu_r from 1 
+            mu_r_dev = np.abs(_mu_r.real - 1)  
             # err = np.abs(np.longdouble(tau_calc) - np.longdouble(self._s_params['tau_mea'].values))
 
 
             # concat the error as a new columen with the namen n
             errors = pd.concat([errors, pd.DataFrame({f'{n}': err}, index=f)], axis=1)
             tau = pd.concat([tau, pd.DataFrame({f'{n}': tau_calc}, index=f)], axis=1)
+            mu_r_df = pd.concat([mu_r_df, pd.DataFrame({f'{n}': mu_r_dev}, index=f)], axis=1)
+
             _tmp_calc.append((n, pd.DataFrame({
                 'freq': _freq, 
                 # 'n': n, 
@@ -409,6 +415,8 @@ class NRWBase(MeasurementData):
                 }, index=f
             )))
             self.logger.disabled = False
+        
+        mu_r_df.to_excel(f'{self._tmp_folder}/mu_r_error_calculation.xlsx')
 
 
         # #export the errors and tau to a csv file
@@ -420,27 +428,38 @@ class NRWBase(MeasurementData):
         writer.close()
         # exit()  
 
-        # find the columen in each row with the minimum value
-        self.logger.debug("Calculating the minimum error and corresponding n value for each frequency point.")
-        cols_to_check = errors.columns.difference(['f'])
-        errors['error'] = errors[cols_to_check].min(axis=1)
-        errors['n'] = errors[cols_to_check].idxmin(axis=1)
-        errors['n'] = errors['n'].str.replace(' ', '').astype(int)  # remove spaces and convert to int
+        # # find the columen in each row with the minimum value
+        # self.logger.debug("Calculating the minimum error and corresponding n value for each frequency point.")
+        # cols_to_check = errors.columns.difference(['f'])
+        # errors['error'] = errors[cols_to_check].min(axis=1)
+        # errors['n'] = errors[cols_to_check].idxmin(axis=1)
+        # errors['n'] = errors['n'].str.replace(' ', '').astype(int)  # remove spaces and convert to int
 
-        # Select a single n, based on a majority vote
-        self.logger.debug("Selecting the most common n value across all frequency points.")
-        n_counts = errors['n'].value_counts()
-        if not n_counts.empty:
-            self.logger.debug(f"n counts: {n_counts}")
-            errors['n'] = n_counts.idxmax()
+        # # Select a single n, based on a majority vote
+        # self.logger.debug("Selecting the most common n value across all frequency points.")
+        # n_counts = errors['n'].value_counts()
+        # if not n_counts.empty:
+        #     self.logger.debug(f"n counts: {n_counts}")
+        #     errors['n'] = n_counts.idxmax()
 
-        errors.to_excel(f'{self._tmp_folder}/tau_error_calculation.xlsx')
+        # select the n, where mu is the closest to 1
+        self.logger.debug("Selecting the n value where mu_r is closest to 1.")
+
+        cols_to_check = mu_r_df.columns.difference(['f'])
+        print(f"cols_to_check: {cols_to_check}")
+        
+        mu_r_df['error'] = mu_r_df[cols_to_check].min(axis=1)
+        mu_r_df['n'] = mu_r_df[cols_to_check].idxmin(axis=1)
+        mu_r_df['n'] = mu_r_df['n'].str.replace(' ', '').astype(int)  # remove spaces and convert to int
+        
+
+        mu_r_df.to_excel(f'{self._tmp_folder}/tau_error_calculation.xlsx')
         tau.to_excel(f'{self._tmp_folder}/tau_calculation.xlsx')
 
-        errors_filtered = errors[['error', 'n']]
+        mu_r_df = mu_r_df[['error', 'n']]
         
-        self.logger.debug(f"{errors_filtered}")
-        return errors_filtered
+        self.logger.debug(f"{mu_r_df}")
+        return mu_r_df
    
     def estimate_n_from_group_delay(self, n_range=(0, 10)):
         # check if more than 1 frequency point is available
