@@ -109,11 +109,7 @@ class NRWBase(MeasurementData):
             # group delay in seconds
             #self.tau_mea = self.calc_tau_mea(self.freq, self.Z1)  # group delay in seconds
             #for __n in range(0, 5):
-            _n = np.zeros_like(self.freq, dtype=int)  # initialize n to zeros
-            _alpha = self.calc_alpha(self.Z1, _n)  # calculate alpha from Z1 and n
-            self.tau_mea  = np.gradient(
-                self.sample_length*self.calc_beta(_alpha, self.sample_length),
-                self.freq, axis=0).reshape(-1, 1) # group delay in seconds
+            self.tau_mea = self.calc_tau_mea(self.freq, self.Z1)  # group delay in seconds
             
             # self._s_params['tau_mea'] = -_polyfit_T[0]/(2*np.pi)  # group delay in seconds
             # self._s_params['v_g_mea']  =  self.sample_length / self._s_params['tau_mea'].values
@@ -148,7 +144,7 @@ class NRWBase(MeasurementData):
         
         try:
             self.n = self.estimate_n_from_group_delay()  # estimate the number of wavelengths n
-            # self.n = np.zeros_like(self.freq, dtype=int) # initialize n to zeros if estimation fails	
+            self.n = np.zeros_like(self.freq, dtype=int) +4 # initialize n to zeros if estimation fails	
             # make a ramp from 5 to 7 with n=self.f datapoints
             #self.n = np.round(np.linspace(5, 7, len(self.f)), 0).astype(int)  # initialize n to a ramp from 5 to 7 if estimation fails
         except Exception as e:
@@ -446,7 +442,7 @@ class NRWBase(MeasurementData):
         self.logger.debug(f"{errors_filtered}")
         return errors_filtered
    
-    def estimate_n_from_group_delay(self, n_range=(0, 50)):
+    def estimate_n_from_group_delay(self, n_range=(0, 10)):
         # check if more than 1 frequency point is available
         if len(self.s_params['freq']) < 2:
             self.logger.error("Not enough frequency points to estimate n.")
@@ -775,14 +771,20 @@ class NRWBase(MeasurementData):
             phi = np.unwrap(np.angle(Z1))
             ```
         """
-        # Check if more than 1 frequency point is available
-        if len(freq) < 2:
-            self.logger.error("Not enough frequency points to calculate group delay.")
-            return np.zeros((len(freq), 1))
+        # # Check if more than 1 frequency point is available
+        # if len(freq) < 2:
+        #     self.logger.error("Not enough frequency points to calculate group delay.")
+        #     return np.zeros((len(freq), 1))
         
-        self.logger.debug(f"Calculating measured group delay tau_mea = -d(unwrap(angle(Z1)))/d(2*pi*freq)")
-        _omega = 2*np.pi*freq
-        _tau_mea = -np.gradient(np.unwrap(np.angle(Z1)), _omega, axis=0).reshape(-1, 1) 
+        # self.logger.debug(f"Calculating measured group delay tau_mea = -d(unwrap(angle(Z1)))/d(2*pi*freq)")
+        # _omega = 2*np.pi*freq
+        # _tau_mea = -np.gradient(np.unwrap(np.angle(Z1)), _omega, axis=0).reshape(-1, 1) 
+        _n = np.zeros_like(self.freq, dtype=int)  # initialize n to zeros
+        _alpha = self.calc_alpha(self.Z1, _n)  # calculate alpha from Z1 and n
+        _tau_mea  = np.gradient(
+            self.sample_length*self.calc_beta(_alpha, self.sample_length),
+            self.freq, axis=0).reshape(-1, 1) # group delay in seconds
+        
         return _tau_mea
 
     # ==================================================================================================================
@@ -847,12 +849,12 @@ class NRWBase(MeasurementData):
             [1], Page 34, Equation 1.5
             [2], Page 16, Equation 2.45
         """
-        self.logger.debug(f"Calculating {STR_alpha} = ln(1/Z1) for n = {n}")
+        self.logger.debug(f"Calculating {STR_alpha} = ln(1/Z1) for n = {self.str_array_repr(n)}")
         ln_inv_Z1_mag = np.log(np.abs(1/Z1))
         ln_inv_Z1_imag = np.unwrap(np.angle(1/Z1, False)) + 2*np.pi*n  # This is the argument of 1/T
         ln_1_Z1 = ln_inv_Z1_mag + 1j * ln_inv_Z1_imag
-        self.logger.info(f"{STR_alpha}(n={n}) = ln(1/T) = ln({self.str_array_repr(np.abs(1/Z1))}) + j({self.str_array_repr(np.angle(1/Z1, False))}+2*pi*{n}) ={self.str_array_repr(ln_1_Z1)}")
-        self.logger.debug(f"{STR_alpha}(n={n}) = ln(1/T) = ln({self.str_array_repr(np.abs(1/Z1))}) + j({self.str_array_repr(np.angle(1/Z1, False))}+2*pi*{n}) = {self.str_array_repr(ln_1_Z1, polar=False)}")
+        self.logger.info(f"{STR_alpha}(n={self.str_array_repr(n)}) = ln(1/T) = ln({self.str_array_repr(np.abs(1/Z1))}) + j({self.str_array_repr(np.angle(1/Z1, False))}+2*pi*{n}) ={self.str_array_repr(ln_1_Z1)}")
+        self.logger.debug(f"{STR_alpha}(n={self.str_array_repr(n)}) = ln(1/T) = ln({self.str_array_repr(np.abs(1/Z1))}) + j({self.str_array_repr(np.angle(1/Z1, False))}+2*pi*{n}) = {self.str_array_repr(ln_1_Z1, polar=False)}")
         return ln_1_Z1
 
     def calc_beta(self, alpha, sample_length) -> np.ndarray:

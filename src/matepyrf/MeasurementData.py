@@ -322,15 +322,16 @@ class MeasurementData():
             else:
                 _arr = [f"({self.rect(x)})" for x in arr]
                 return f"[{', '.join(map(str, _arr[:_n]))}, ..., {', '.join(map(str, _arr[-_n:]))}]"
-            
-        if len(arr) <= n:
-            return str(arr)
-        elif n is None or n <= 0:
-            n = len(arr) // 2
+        if isinstance(arr, (list, tuple, np.ndarray, pd.Series)):
+            if len(arr) <= n:
+                return str(arr)
+            elif n is None or n <= 0:
+                n = len(arr) // 2
 
         
-        return _repr(n)
-
+            return _repr(n)
+        elif isinstance(arr, (int, float, complex)):
+           return n
         
     def polar(self, num, decimals=2):
         return f"{np.round(np.abs(num),decimals)} ∠ {np.round(np.angle(num, deg=True), decimals)}"
