@@ -99,15 +99,22 @@ class NRWBase(MeasurementData):
         
 
         try:
-            # self._s_params['tau_mea_gd'] = measurement_data.s21.group_delay.reshape(-1, 1).real
-            # self._s_params['tau_mea_S21']  = -np.gradient(np.unwrap(np.angle(measurement_data.s21.s.squeeze())), measurement_data.frequency.w, axis=0).reshape(-1, 1) # group delay in seconds
+            # self.tau_mea = measurement_data.s21.group_delay.reshape(-1, 1).real
+            self._s_params['tau_mea_S21']  = -np.gradient(np.unwrap(np.angle(measurement_data.s21.s.squeeze())), measurement_data.frequency.w, axis=0).reshape(-1, 1) # group delay in seconds
             # make a polyfit of _T
             # _polyfit_T = np.polyfit(self._scaled_f, np.unwrap(np.angle(_T)), 1)
             # self._s_params['_T'] = (np.angle(_T))  # store the polynomial fit of the phase of T
             # # _polyfit_T = _polyfit_T(self._scaled_f)  # evaluate the polynomial at the scaled frequency
             # self._s_params['polyfit_T'] = _polyfit_T[0]*self._scaled_f + _polyfit_T[1]  # store the polynomial fit
             # group delay in seconds
-            self.tau_mea = self.calc_tau_mea(self.freq, self.Z1)  # group delay in seconds
+            #self.tau_mea = self.calc_tau_mea(self.freq, self.Z1)  # group delay in seconds
+            #for __n in range(0, 5):
+            _n = np.zeros_like(self.freq, dtype=int)  # initialize n to zeros
+            _alpha = self.calc_alpha(self.Z1, _n)  # calculate alpha from Z1 and n
+            self.tau_mea  = np.gradient(
+                self.sample_length*self.calc_beta(_alpha, self.sample_length),
+                self.freq, axis=0).reshape(-1, 1) # group delay in seconds
+            
             # self._s_params['tau_mea'] = -_polyfit_T[0]/(2*np.pi)  # group delay in seconds
             # self._s_params['v_g_mea']  =  self.sample_length / self._s_params['tau_mea'].values
             
@@ -129,8 +136,10 @@ class NRWBase(MeasurementData):
             # self._s_params['n']  = self.sample_length / self._s_params['lam_g_mea'].values
             # self.logger.debug(f"Calculated group delay from measurement data: {  self._s_params['tau_mea'].values}")
         except Exception as e:
+
             self.logger.warning(f"Group delay data not available: {e}")
             self._s_params['tau_mea'] = np.zeros((self.freq.shape[0], 1)).real  # initialize to zeros if not available
+            raise e
             # Add group delay tau_g if available    
 
         self.logger.debug(f"S-Parameters DataFrame:\n{self._s_params}")
@@ -138,8 +147,8 @@ class NRWBase(MeasurementData):
         # Save S-Parameters to Excel file
         
         try:
-            #self.n = self.estimate_n_from_group_delay()  # estimate the number of wavelengths n
-            self.n = np.zeros_like(self.freq, dtype=int) # initialize n to zeros if estimation fails	
+            self.n = self.estimate_n_from_group_delay()  # estimate the number of wavelengths n
+            # self.n = np.zeros_like(self.freq, dtype=int) # initialize n to zeros if estimation fails	
             # make a ramp from 5 to 7 with n=self.f datapoints
             #self.n = np.round(np.linspace(5, 7, len(self.f)), 0).astype(int)  # initialize n to a ramp from 5 to 7 if estimation fails
         except Exception as e:
@@ -283,7 +292,7 @@ class NRWBase(MeasurementData):
     # Estimate the integer phase ambiguity value `n` that minimizes the RMS error between calculated and measured 
     # roup delay.
     # ==================================================================================================================
-    def _calculate_errors(self, f, S11, S21, tau_meas, n_range: tuple):
+    def _calculate_errors(self, f, n_range: tuple):
         """
             Estimate the integer phase ambiguity value `n` that minimizes the
             RMS error between calculated and measured group delay.
@@ -312,10 +321,10 @@ class NRWBase(MeasurementData):
             self.logger.disabled = True
             # pbar.set_description(f"Estimating for n = {n}...")  # Write to the logger
             # Compute tau_calc using Equation (1.7)
-            mu_r = self.permeability(f, S11, S21, n)
-            eps_r = self.permittivity(f, S11, S21, mu_r, n)
+            mu_r = self.permeability(self.Z1, n)
+            eps_r = self.permittivity(mu_r)
             # print(f, np.imag(eps_r))
-           # create a 3x3 tensor with the imag part on the diagonal
+            # create a 3x3 tensor with the imag part on the diagonal
             # eps_r_tensor = np.array([
             #     [np.imag(eps_r[0]), 0, 0],
             #     [0, np.imag(eps_r[0]), 0], 
@@ -340,12 +349,12 @@ class NRWBase(MeasurementData):
             # calculate the error
             # err = eps_r.imag - eps_re
             # print(f"    -> Error: {err} for n={n} and eps_r={eps_r[0]}")
-            _f_scaled = f# / 1e9  # convert frequency to GHz
-            _lam_c = c_const / (self.f_c)  #/ 1e9 cutoff wavelength in m
-            lam0 = c_const / _f_scaled  # free space wavelength in m
-            _L = self.sample_length#*1e9 # convert length to mm
+            # _f_scaled = f# / 1e9  # convert frequency to GHz
+            # _lam_c = c_const / (self.f_c)  #/ 1e9 cutoff wavelength in m
+            # lam0 = c_const / _f_scaled  # free space wavelength in m
+            # _L = self.sample_length#*1e9 # convert length to mm
 
-            f, _eps_r, _mu_r, tau_calc, interm_res = self.tau_calculated1(_f_scaled, eps_r, mu_r, _L, _lam_c)
+            _freq, _eps_r, _mu_r, tau_calc, interm_result = self.tau_calculated1(f, eps_r, mu_r, self.sample_length, self.lam_c)
             # _lam_g = self.lam_g(_f_scaled, n)
             # lam_g_estimated = self.lam_g_estimated(eps_r, mu_r, lam0, _lam_c)
             
@@ -369,8 +378,8 @@ class NRWBase(MeasurementData):
             # _d_beta_df = self.sample_length * np.gradient(self.calc_beta(__alpha, self.sample_length, n), f)
 
             # eps_re = [self.kkr(f, _epsimg)  for _epsimg, _f in  zip(np.imag(eps_r), f)] # calculate the scalar Kramers-Kronig relation for eps_r
-            L, lam_c, term1, term2, sqrt_term, d_product_df, numerator, product = interm_res
-            err = np.abs(np.longdouble(tau_calc) - np.longdouble(tau_meas))
+            _sample_length, _lam_c, _product, _d_product_df, _term1, _term2, _sqrt_term, _numerator, _denominator = interm_result
+            err = np.abs((tau_calc.real - self.tau_mea.values.real).real)  # calculate the error between calculated and measured group delay
             # err = np.abs(np.longdouble(tau_calc) - np.longdouble(self._s_params['tau_mea'].values))
 
 
@@ -378,20 +387,21 @@ class NRWBase(MeasurementData):
             errors = pd.concat([errors, pd.DataFrame({f'{n}': err}, index=f)], axis=1)
             tau = pd.concat([tau, pd.DataFrame({f'{n}': tau_calc}, index=f)], axis=1)
             _tmp_calc.append((n, pd.DataFrame({
-                'f': f, 
+                'freq': _freq, 
                 # 'n': n, 
-                'eps_r': _eps_r, 'mu_r': _mu_r, 
-                'L': L, 
-                'lam_c': lam_c,
+                'eps_r': _eps_r, 'mu_r': _mu_r,
                 'tau_calc': tau_calc, 
-                'tau_mea': tau_meas, 
+                'tau_mea': self.tau_mea.values, 
                 'err': err, 
-                'term1': term1, 
-                'term2': term2, 
-                'sqrt_term': sqrt_term, 
-                'd_product_df': d_product_df, 
-                'numerator': numerator, 
-                'product': product,
+                '_sample_length': _sample_length,
+                '_lam_c': _lam_c,
+                '_product': _product,
+                '_d_product_df': _d_product_df, 
+                '_term1': _term1, 
+                '_term2': _term2, 
+                'sqrt_term': _sqrt_term, 
+                '_numerator': _numerator, 
+                '_denominator': _denominator,
                 #
                 # 'length_calc': length_calc,
                 # '_calc_beta': _d_beta_df
@@ -421,6 +431,13 @@ class NRWBase(MeasurementData):
         errors['n'] = errors[cols_to_check].idxmin(axis=1)
         errors['n'] = errors['n'].str.replace(' ', '').astype(int)  # remove spaces and convert to int
 
+        # Select a single n, based on a majority vote
+        self.logger.debug("Selecting the most common n value across all frequency points.")
+        n_counts = errors['n'].value_counts()
+        if not n_counts.empty:
+            self.logger.debug(f"n counts: {n_counts}")
+            errors['n'] = n_counts.idxmax()
+
         errors.to_excel(f'{self._tmp_folder}/tau_error_calculation.xlsx')
         tau.to_excel(f'{self._tmp_folder}/tau_calculation.xlsx')
 
@@ -429,13 +446,13 @@ class NRWBase(MeasurementData):
         self.logger.debug(f"{errors_filtered}")
         return errors_filtered
    
-    def estimate_n_from_group_delay(self, n_range=(0, 10)):
+    def estimate_n_from_group_delay(self, n_range=(0, 50)):
         # check if more than 1 frequency point is available
         if len(self.s_params['freq']) < 2:
             self.logger.error("Not enough frequency points to estimate n.")
             return 0
         self.logger.debug(f"Estimating n from group delay with frequency range {self.s_params['freq'].min()}Hz to {self.s_params['freq'].max()}Hz")
-        err_and_n = self._calculate_errors(self.s_params['freq'].values, self.s_params['S11'].values, self.s_params['S21'].values, self.s_params['tau_mea'].values, n_range)
+        err_and_n = self._calculate_errors(self.s_params['freq'].values, n_range)
         
         # append the errors to the s_params DataFrame
        
@@ -547,9 +564,9 @@ class NRWBase(MeasurementData):
     # ==================================================================================================================
     # 
     # ==================================================================================================================
-    def tau_calculated1(self, f, eps_r, mu_r, L, lam_c):
+    def tau_calculated1(self, freq, eps_r, mu_r, sample_length, lam_c):
         """
-        Compute calculated group delay τ_cal using full Equation (1.7)
+        Compute calculated group delay τ_cal using full Equation [2] (2.48)
         
         Parameters:
         - f: frequency array [Hz]
@@ -561,27 +578,31 @@ class NRWBase(MeasurementData):
         - tau_cal: calculated group delay [s]
         """
         # Product and derivative
-        eps_r = eps_r
-        mu_r = mu_r
-        d_eps_r_df = np.gradient(eps_r, f)
-        d_mu_r_df = np.gradient(mu_r, f)
-        product = eps_r * mu_r
+        eps_r = eps_r.values
+        mu_r = mu_r.values
         
-        d_product_df = 0*(np.gradient(eps_r, f)*mu_r +  np.gradient(mu_r, f)*eps_r)
-        term1 = 2*f * eps_r* mu_r
-        term2 = (np.power(f, 2)) * (np.gradient(eps_r, f)*mu_r +  np.gradient(mu_r, f)*eps_r)
+        product = eps_r * mu_r
+        d_product_df = np.gradient(product, freq)  # Initialize to zero, will be calculated later
+
+        term1 = freq * product
+        term2 = 0.5 * np.power(freq, 2) * d_product_df
         # print(f"    -> (eps_r*mu_r).real: {product} and d_product_df: {d_product_df}")
 
         # Square root term in denominator
-        sqrt_term = 2*np.power(c_const, 2)*np.sqrt(((product * np.power(f, 2)) / (np.power(c_const, 2))) - (1 / np.power(lam_c, 2)))
+        sqrt_term = np.sqrt(
+                ((product * np.power(freq, 2)) / (np.power(c_const, 2)))
+                - 
+                (1 / np.power(lam_c, 2))
+            )
         # print(f"    -> sqrt_term: {sqrt_term}")
 
         # Numerator of derivative
         numerator = (term1 + term2)
+        denominator = sqrt_term
 
         # Final τ_cal
-        tau_calc = L * (numerator / sqrt_term)
-        return f, eps_r, mu_r, tau_calc, (L, lam_c, term1, term2, sqrt_term, d_product_df, numerator, product)
+        tau_calc = ((sample_length/np.power(c_const, 2)) * (numerator / denominator))
+        return freq, eps_r, mu_r, tau_calc, (sample_length, lam_c, product, d_product_df, term1, term2, sqrt_term, numerator, denominator)
     
     # ==================================================================================================================
     # 
@@ -885,10 +906,10 @@ class NRWBase(MeasurementData):
     # ==================================================================================================================
     # 
     # ==================================================================================================================
-    def permeability(self, f, S11, S21, n: int) -> np.ndarray:
+    def permeability(self, *arg, **kwargs) -> np.ndarray:
         raise NotImplementedError("Subclasses should implement this method to calculate relative permeability mu_r.")
     
-    def permittivity(self, f, S11, S21, mu_r, n: int) -> np.ndarray:
+    def permittivity(self, *arg, **kwargs) -> np.ndarray:
         raise NotImplementedError("Subclasses should implement this method to calculate relative permittivity eps_r.")
     
     # ==================================================================================================================
@@ -945,6 +966,9 @@ class NRWBase(MeasurementData):
         self.logger.info(f"Converted complex permittivity to real part: {self.str_array_repr(eps_r)} and loss tangent: {self.str_array_repr(tanDelta)}")
         return eps_r, tanDelta
 
+    # ==================================================================================================================
+    #
+    # ==================================================================================================================
     def calculate_trendline(self, x, y, degree=10):
         """
         Calculate a polynomial trendline of specified degree for the given x and y data.
@@ -1039,6 +1063,7 @@ class NRWBase(MeasurementData):
 
 
         # self.slider.on_changed(update)
+    
     def plot_s_params_db(self, ax=None):
          # Plot 1: S11 and S12 in dB
         ax.title.set_text(f'S-Parameters in dB: {self.measurement_data.name}')

@@ -5,6 +5,7 @@ import logging
 from rich.logging import RichHandler
 from scipy.constants import c as c_const
 import pathlib
+import time
 
 from .Waveguide import Waveguide
 
@@ -43,7 +44,7 @@ class MeasurementData():
 
 
 
-        # Storing temporary calulöation resuls
+        # Storing temporary calulation resuls
         self._tmp_folder = pathlib.Path("tmp")  # Temporary folder for storing calculation results
         # use pathlib to check if folder exists, if not create it
         if not self._tmp_folder.exists():
@@ -51,6 +52,14 @@ class MeasurementData():
             self.logger.info(f"Created temporary folder: {self._tmp_folder}")
         else:
             self.logger.info(f"Temporary folder already exists: {self._tmp_folder}")
+
+        # Check if any excel files are open with the pattern "~*.xlsx" and wait until all are closed
+        while any(self._tmp_folder.glob("~*.xlsx")):
+            self.logger.warning("Waiting for all Excel files to be closed...")
+            # Wait for a while before checking again
+            time.sleep(1)
+        self.logger.info("All Excel files are closed, proceeding with calculations.")
+
  
     def _create_s_params_dataframe(self, measurement_data: rf.Network, clip: tuple = None) -> pd.DataFrame:
 

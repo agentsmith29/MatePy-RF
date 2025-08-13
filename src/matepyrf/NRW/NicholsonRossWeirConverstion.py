@@ -20,8 +20,8 @@ class NicholsonRossWeirConverstion(NRWBase):
       
 
         # (6) Calculate delta from equation (1.4)
-        self.mu_r = self.permeability(self.Z1, 0)    
-        self.eps_r = self.permittivity(self.mu_r, 0)    
+        self.mu_r = self.permeability(self.Z1, self.n)    
+        self.eps_r = self.permittivity(self.mu_r)    
 
         # check if mu_r is over 1, and under 10
         # self.mu_r = np.where(np.abs(self.mu_r) < 1, 1, self.mu_r)
@@ -67,7 +67,7 @@ class NicholsonRossWeirConverstion(NRWBase):
         self.logger.info(f"[Calculated relative permeability mu_r(n = {n}) = {self.str_array_repr(mu_r, polar=False)}")
         return mu_r
 
-    def permittivity(self, mu_r, n: int):
+    def permittivity(self, mu_r):
         # (1) Calculate X from S11 and S21
         #         self.logger.debug("[4.1]  From equation 1.5 ([1], P20, Eq. 1.5) , calculate alpha = ln(1/T)")
     
@@ -75,5 +75,5 @@ class NicholsonRossWeirConverstion(NRWBase):
         term1 = np.power(self.lam0, 2) / np.power(self.lam_c, 2)
         self.logger.debug(f"Calculating eps_r =  mu_r * ((1/z)^2) * (1 - (lam0^2/lamc^2)) + (lam0^2/lamc^2)*1/mu_r")
         eps_r =  mu_r * np.power((1/self.z) ,2) * (1 - (term1)) + term1/mu_r
-        self.logger.info(f"Calculated relative permittivity: eps_r(n = {n}) = {self.str_array_repr(eps_r, polar=False)}")
+        self.logger.info(f"Calculated relative permittivity: eps_r = {self.str_array_repr(eps_r, polar=False)}")
         return eps_r
